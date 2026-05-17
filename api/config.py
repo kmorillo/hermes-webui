@@ -1772,6 +1772,19 @@ def resolve_model_provider(model_id: str) -> tuple:
             and prefix != config_provider
         ):
             return model_id, "openrouter", None
+        # Cross-provider via custom_providers: if the prefix matches a named custom
+        # provider entry (e.g. "ollama-local/glm-4.7-flash:q4_k_m"), route through it
+        # instead of falling back to the default config provider. MUST come BEFORE
+        # the config_base_url branch because many providers have a base_url set.
+        if prefix and config_provider and prefix != config_provider:
+            _custom_cfg = cfg.get("custom_providers", [])
+            if isinstance(_custom_cfg, list):
+                for _entry in _custom_cfg:
+                    if isinstance(_entry, dict) and _entry.get("name", "").strip() == prefix:
+                        _slug = _custom_provider_slug_from_name(prefix)
+                        _base = (_entry.get("base_url") or "").strip()
+                        return model_id, _slug, _base or None
+
         # If a custom endpoint base_url is configured, don't reroute through OpenRouter
         # just because the model name contains a slash (e.g. google/gemma-4-26b-a4b).
         # The user has explicitly pointed at a base_url, so trust their routing config.
@@ -3812,11 +3825,21 @@ def get_available_models() -> dict:
             or (g.get("provider_id") or "").startswith("custom:")
         ]
 
+        # 12. Include model aliases so the WebUI frontend can resolve them.
+        model_aliases: dict[str, str] = {}
+        try:
+            raw_aliases = cfg.get("model", {}).get("aliases", {})
+            if isinstance(raw_aliases, dict):
+                model_aliases = {str(k).strip(): str(v).strip() for k, v in raw_aliases.items() if k and v}
+        except Exception:
+            pass
+
         return {
             "active_provider": active_provider,
             "default_model": default_model,
             "configured_model_badges": _build_configured_model_badges(),
             "groups": groups,
+            "aliases": model_aliases,
         }
 
     # ── FAST PATH ─────────────────────────────────────────────────────────────
@@ -4018,9 +4041,38 @@ SESSION_AGENT_CACHE_LOCK = threading.Lock()
 
 
 def _evict_session_agent(session_id: str) -> None:
-    """Remove a cached agent for a session (on delete, clear, or model switch)."""
+    """Remove a cached agent for a session (on delete, clear, or model switch).
+
+    Attempts a lifecycle commit before dropping the agent handle so that
+    batch-extraction memory providers can extract any pending work.  If the
+    commit fails or there is uncommitted work with no successful commit, the
+    lifecycle entry is preserved (not unregistered) so a future commit can
+    retry.
+    """
+    agent = None
     with SESSION_AGENT_CACHE_LOCK:
-        SESSION_AGENT_CACHE.pop(session_id, None)
+        entry = SESSION_AGENT_CACHE.pop(session_id, None)
+        if entry is not None:
+            agent = entry[0] if isinstance(entry, tuple) else None
+    if agent is None:
+        return
+    should_close = True
+    try:
+        from api.session_lifecycle import commit_session_memory, has_uncommitted_work, unregister_agent
+        if has_uncommitted_work(session_id):
+            commit_session_memory(session_id, agent=agent, wait=True)
+        if not has_uncommitted_work(session_id):
+            unregister_agent(session_id)
+        else:
+            should_close = False
+    except Exception:
+        should_close = False
+        logger.debug("Lifecycle commit on eviction failed for %s", session_id, exc_info=True)
+    if should_close and getattr(agent, '_session_db', None) is not None:
+        try:
+            agent._session_db.close()
+        except Exception:
+            logger.debug("Failed to close _session_db on eviction for %s", session_id, exc_info=True)
 
 # ── Thread-local env context ─────────────────────────────────────────────────
 _thread_ctx = threading.local()

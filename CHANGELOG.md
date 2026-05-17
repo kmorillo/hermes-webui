@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [v0.51.86] — 2026-05-17 — Release BJ (stage-379 — 4-PR review-bypass batch — memory-provider session lifecycle + cross-provider /model alias + RuntimeAdapter cancel seam + Fork-from-here messaging coord)
+
+### Fixed
+
+- **PR #2461** by @starship-s — Add a WebUI-side memory-provider session lifecycle for batch-extraction providers (OpenViking, etc.). The new `api/session_lifecycle.py` module tracks per-session generation, segment ownership, and an `in_flight` flag with a `threading.Condition`, so a late-finishing commit can only advance `committed_generation` against its captured generation without erasing newer turns marked during the commit. `mark_turn_completed` runs post-turn after save/cancel/completed-journal guards; `commit_session_memory` runs at session boundaries (new session, eviction, shutdown) outside cache locks and per-session mutation locks. `register_agent`/`unregister_agent` preserves dirty segment owners so failed work remains retryable even if the cache drops the current agent reference. `drain_all_on_shutdown` flushes every registered session with uncommitted work at process exit.
+- **PR #2473** by @ts2111 — `/model <alias>` now correctly routes cross-provider custom-model aliases to their `custom_providers[].name` rather than incorrectly falling through to the active provider's `config_base_url` branch. Adds a custom-providers prefix check in `resolve_model_provider()` between the explicit early-return carve-outs and the `config_base_url` catch-all, and exposes a top-level `aliases` key in `/api/models` so the frontend can resolve user-defined `/model <alias>` shortcuts. `cmdModel()` now fetches `/api/models`, resolves the alias, fuzzy-matches the dropdown, and falls back to a direct `POST /api/session/update` when no dropdown match exists.
+- **PR #2480** by @Michaelyklam (closes #2472) — Make "Fork from here" use the same merged messaging-session transcript coordinate space that `/api/session` exposes, so forking an older message no longer silently copies the full sidecar when CLI/Gateway history inflated the visible message offset. Extracts the merge logic into `_merged_session_messages_for_display(session, cli_messages)` and routes both `GET /api/session` and `POST /api/session/branch` through it. The frontend snapshots the source session id across the async full-history load (so a fast sidebar switch can't fork the wrong session), reloads the forked transcript fully after creation, and the branch handler best-effort saves the source session before slicing to keep undo/retry state coherent.
+
+### Changed
+
+- **PR #2479** by @Michaelyklam (refs #1925) — Route Stop Generation through the default-off `RuntimeAdapter.cancel_run(...)` seam when `HERMES_WEBUI_RUNTIME_ADAPTER=legacy-journal` is enabled. Implements the first code slice of the Slice 3a cancel-control gate accepted in #2469 / v0.51.85. The default `legacy-direct` path still calls `cancel_stream(...)` directly; the adapter branch preserves the existing `{ok, cancelled, stream_id}` JSON response contract. No new cancellation registry, runner, sidecar, approval/clarify, queue/goal, or cached-agent state is introduced — adapter remains a pure protocol translator.
+
 ## [v0.51.85] — 2026-05-17 — Release BI (stage-378 — 3-PR batch — workspace-prefix display leakage fix + release-tag update banner + Slice 3a cancel-control gate RFC)
 
 ### Fixed

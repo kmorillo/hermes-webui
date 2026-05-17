@@ -109,6 +109,34 @@ def test_legacy_journal_adapter_controls_delegate_to_existing_handlers():
     ]
 
 
+def test_legacy_journal_adapter_cancel_returns_bounded_not_active_status():
+    runtime = importlib.import_module("api.runtime_adapter")
+    calls = []
+    adapter = runtime.LegacyJournalRuntimeAdapter(
+        cancel_delegate=lambda run_id: calls.append(run_id) or False,
+    )
+
+    result = adapter.cancel_run("already-finished-run")
+
+    assert calls == ["already-finished-run"]
+    assert result.accepted is False
+    assert result.status == "not-active"
+    assert result.safe_message == "Legacy control did not accept the request."
+
+
+def test_chat_cancel_route_uses_adapter_only_when_flag_enabled():
+    routes = importlib.import_module("api.routes")
+    src = (routes.Path(__file__).parent.parent / "api" / "routes.py").read_text(encoding="utf-8")
+    cancel_idx = src.index('if parsed.path == "/api/chat/cancel":')
+    cancel_body = src[cancel_idx:src.index('if parsed.path == "/api/chat/stream":', cancel_idx)]
+
+    assert "runtime_adapter_enabled()" in cancel_body
+    assert "LegacyJournalRuntimeAdapter(cancel_delegate=cancel_stream)" in cancel_body
+    assert "adapter.cancel_run(stream_id).accepted" in cancel_body
+    assert "else:\n            cancelled = cancel_stream(stream_id)" in cancel_body
+    assert "HERMES_WEBUI_RUNTIME_ADAPTER" not in cancel_body, "route should use runtime_adapter_enabled(), not inline env checks"
+
+
 def test_chat_start_route_selects_adapter_only_when_flag_enabled():
     routes = importlib.import_module("api.routes")
     src = (routes.Path(__file__).parent.parent / "api" / "routes.py").read_text(encoding="utf-8")
@@ -129,9 +157,11 @@ def test_chat_start_adapter_path_preserves_legacy_response_shape():
     """
     routes = importlib.import_module("api.routes")
     src = (routes.Path(__file__).parent.parent / "api" / "routes.py").read_text(encoding="utf-8")
-    branch_start = src.index("if runtime_adapter_enabled():")
-    branch_end = src.index("else:", branch_start)
-    adapter_branch = src[branch_start:branch_end]
+    start_idx = src.index("def _handle_chat_start")
+    start_body = src[start_idx:src.index("def _resolve_chat_workspace_with_recovery", start_idx)]
+    branch_start = start_body.index("if runtime_adapter_enabled():")
+    branch_end = start_body.index("else:", branch_start)
+    adapter_branch = start_body[branch_start:branch_end]
 
     assert 'response.setdefault("stream_id", result.stream_id)' in adapter_branch
     assert 'response.setdefault("session_id", result.session_id)' in adapter_branch
