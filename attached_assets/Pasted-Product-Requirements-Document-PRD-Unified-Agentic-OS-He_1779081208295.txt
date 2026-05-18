@@ -1,0 +1,47 @@
+Product Requirements Document (PRD): Unified Agentic OS & Hermes Workspace
+1. Product Vision & Objectives
+The Agentic OS Dashboard is a self-hosted, single-user "Mission Control" designed to orchestrate a fleet of autonomous AI agents (Claude Code, Hermes, and local models). It bridges the gap between raw LLM reasoning and professional infrastructure management by integrating persistent memory (Mem0), structured knowledge (Obsidian), and real-time system monitoring into a single unified workspace.
+2. Technical Architecture
+• Deployment: Docker-first architecture; optional Electron-based desktop wrapper for easier local installation and configuration.
+• Networking: Native PWA support for mobile; built-in Tailscale integration for secure remote access via personal Tailnets.
+• Security: Auth middleware on every route; CSP and path-traversal guards; backend stored in an encrypted SQLite database.
+• Zero-Fork Compatibility: Deep integration with vanilla hermes-agent via standard API endpoints, ensuring compatibility with upstream updates.
+3. Functional Requirements
+3.1 Agent Swarm & Mission Control
+• Conductor (Mission Dispatch): A mission-control surface to decompose complex requests into smaller tasks, assign them to specialized workers, and watch live output.
+• Swarm Mode: Persistent tmux-backed worker processes that maintain context across long-running tasks, rotate safely, and report proof-bearing checkpoints.
+• Specialized Agent Roles: Dedicated lanes for specific functions: Researcher (codebase analysis), Builder (execution), Validator (reviewing diffs), and Scribe (documentation).
+• Multi-Agent Status: Live monitoring of local and remote agents; visual indicators for "Thinking," "Waiting," and "Idle" status; @mention routing for triggering specific agents in group chats.
+3.2 Project & Task Management
+3.3 Cognitive & Memory Integration
+3.4 Infrastructure & Developer Tools
+3.5 Automation & Skill Management
+3.6 Gamified Learning (Optional)
+• HermesWorld / Playground: A gamified action-RPG environment (/playground) to teach and test multi-agent coordination, routing, and memory concepts.
+4. Usage & Cost Analytics
+• Usage Meter: Real-time quota tracking and token consumption breakdown (Input, Output, Cache).
+• Cost Ledger: Detailed 30-day financial trends with correct per-model pricing and estimated vs. actual expenses.
+5. Recommended Resource Catalog
+Component
+Target Repository / Library
+Primary Workspace
+outsourc-e/hermes-workspace
+Desktop Wrapper
+fathah/hermes-desktop
+Web Dashboard
+nesquena/hermes-webui or EKKOLearnAI/hermes-web-ui 
+Terminal / Infra
+Termix-SSH/Termix
+Memory Engine
+mem0ai/mem0 
+RSS Automation
+leozqin/precis 
+Graph Visuals
+xyflow/react-flow
+File Rendering
+@iamjariwala/react-doc-viewer 
+
+
+1. https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f (LLM Wiki - GitHub Gist)
+2. https://github.com/mem0ai/mem0 (GitHub - mem0ai/mem0: Universal memory layer for AI Agents)
+3. https://n8n.io/workflows/6011-daily-ai-news-digest-with-rss-llama-32-summarization-and-telegram-delivery/ (Daily AI news digest with RSS, Llama 3.2 summarization & Telegram delivery | n8n workflow template)

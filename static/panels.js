@@ -224,7 +224,7 @@ async function switchPanel(name, opts = {}) {
   // showing-<name> class on <main>; no class means chat (the default).
   const mainEl = document.querySelector('main.main');
   if (mainEl) {
-    ['settings','skills','memory','tasks','kanban','workspaces','profiles','insights','logs'].forEach(p => {
+    ['settings','skills','memory','tasks','kanban','workspaces','profiles','insights','logs','swarm'].forEach(p => {
       mainEl.classList.toggle('showing-' + p, nextPanel === p);
     });
   }
@@ -238,6 +238,7 @@ async function switchPanel(name, opts = {}) {
   if (nextPanel === 'todos') loadTodos();
   if (nextPanel === 'insights') await loadInsights();
   if (nextPanel === 'logs') await loadLogs();
+  if (nextPanel === 'swarm') await loadSwarm();
   _syncLogsAutoRefresh();
   if (typeof _syncSystemHealthMonitorVisibility === 'function') _syncSystemHealthMonitorVisibility();
   if (nextPanel === 'settings') {
@@ -2930,6 +2931,115 @@ async function loadInsights(animate) {
   }
 }
 
+// ── Swarm / Mission Control ──────────────────────────────────────────────────
+const _SWARM_ROLES = [
+  { id: 'researcher', label: 'Researcher', desc: 'Codebase analysis & deep research', icon: '🔍' },
+  { id: 'builder',    label: 'Builder',    desc: 'Code execution & implementation',   icon: '🔨' },
+  { id: 'validator',  label: 'Validator',  desc: 'Diff review & quality checks',      icon: '✅' },
+  { id: 'scribe',     label: 'Scribe',     desc: 'Documentation & knowledge capture', icon: '📝' },
+];
+
+async function loadSwarm(animate) {
+  const box = $('swarmContent');
+  const list = $('swarmAgentList');
+  const btn = $('swarmRefreshBtn');
+  if (!box) return;
+  if (animate && btn) { btn.style.opacity = '0.5'; btn.disabled = true; }
+  try {
+    const sessions = await api('/api/sessions');
+    const all = sessions.sessions || [];
+    const active = all.filter(s => s.status === 'running' || s.pending_user_message);
+    _renderSwarm(box, list, active);
+  } catch(e) {
+    if (box) box.innerHTML = `<div style="color:var(--accent);font-size:12px;padding:16px">Error: ${esc(e.message)}</div>`;
+  } finally {
+    if (animate && btn) { btn.style.opacity = ''; btn.disabled = false; }
+  }
+}
+
+function _swarmStatusCls(session) {
+  if (!session) return 'idle';
+  if (session.status === 'running') return 'thinking';
+  if (session.pending_user_message) return 'waiting';
+  return 'idle';
+}
+
+function _swarmStatusLabel(cls) {
+  return { thinking: 'Thinking', waiting: 'Waiting', idle: 'Idle' }[cls] || 'Idle';
+}
+
+function _renderSwarm(box, list, activeSessions) {
+  if (list) {
+    list.innerHTML = _SWARM_ROLES.map(r => `
+      <div class="swarm-role-item">
+        <span class="swarm-role-icon" aria-hidden="true">${r.icon}</span>
+        <div class="swarm-role-info">
+          <div class="swarm-role-label">${esc(r.label)}</div>
+          <div class="swarm-role-desc">${esc(r.desc)}</div>
+        </div>
+        <span class="swarm-status-dot idle" aria-label="Idle"></span>
+      </div>`).join('');
+  }
+
+  const agentCardsHtml = _SWARM_ROLES.map(r => {
+    const match = activeSessions.find(s =>
+      (s.title || '').toLowerCase().includes(r.id) ||
+      (s.agent_profile || '').toLowerCase().includes(r.id)
+    );
+    const cls = _swarmStatusCls(match);
+    const label = _swarmStatusLabel(cls);
+    const taskText = match ? esc(match.title || 'Untitled mission') : '<span style="opacity:.45">—</span>';
+    return `
+      <div class="swarm-agent-card swarm-agent-card--${cls}">
+        <div class="swarm-agent-card-head">
+          <span class="swarm-agent-role-icon" aria-hidden="true">${r.icon}</span>
+          <div style="flex:1;min-width:0">
+            <div class="swarm-agent-name">${esc(r.label)}</div>
+            <div class="swarm-agent-desc">${esc(r.desc)}</div>
+          </div>
+          <span class="swarm-status-badge swarm-status-badge--${cls}" aria-label="Status: ${label}">
+            <span class="swarm-status-dot ${cls}" aria-hidden="true"></span>${label}
+          </span>
+        </div>
+        <div class="swarm-agent-task">${taskText}</div>
+      </div>`;
+  }).join('');
+
+  const liveCount = activeSessions.length;
+  const liveDot = liveCount > 0
+    ? `<span class="swarm-status-dot thinking" aria-hidden="true"></span> ${liveCount} active agent${liveCount !== 1 ? 's' : ''}`
+    : `<span class="swarm-status-dot idle" aria-hidden="true"></span> No active agents`;
+
+  box.innerHTML = `
+    <div class="swarm-dispatch-area">
+      <div class="swarm-dispatch-label">Mission Dispatch</div>
+      <div class="swarm-dispatch-desc">Decompose a complex request into sub-tasks and assign them to specialized workers. The mission will be sent to Chat for you to review before launching.</div>
+      <div class="swarm-dispatch-input-row">
+        <textarea class="swarm-dispatch-input" id="swarmMissionInput" placeholder="Describe the mission… e.g. &quot;Analyse the auth module, refactor it, write tests, and document the changes&quot;" rows="3"></textarea>
+        <button class="btn primary swarm-dispatch-btn" onclick="_dispatchMission()" type="button">Dispatch to Chat</button>
+      </div>
+    </div>
+    <div class="swarm-status-bar">
+      <span class="swarm-live-badge">${liveDot}</span>
+      <span class="swarm-agent-roles-label">Agent Fleet</span>
+    </div>
+    <div class="swarm-agent-grid">${agentCardsHtml}</div>
+    <div class="insights-card swarm-info-card">
+      <div class="insights-card-title">About Mission Control</div>
+      <p style="font-size:12px;color:var(--muted);line-height:1.6;margin:0">The Agent Swarm orchestrates a fleet of four specialized workers — <strong>Researcher</strong> (analysis &amp; research), <strong>Builder</strong> (execution), <strong>Validator</strong> (review), and <strong>Scribe</strong> (documentation). Mission Dispatch decomposes complex requests into sub-tasks with proof-bearing checkpoints. Active sessions are detected automatically from Chat.</p>
+    </div>`;
+}
+
+function _dispatchMission() {
+  const input = $('swarmMissionInput');
+  if (!input || !input.value.trim()) return;
+  const mission = input.value.trim();
+  input.value = '';
+  if (typeof switchPanel === 'function') switchPanel('chat', { fromRailClick: false });
+  const ta = document.getElementById('userInput') || document.querySelector('.composer-textarea, textarea[name="userInput"]');
+  if (ta) { ta.value = mission; ta.focus(); ta.dispatchEvent(new Event('input', { bubbles: true })); }
+}
+
 function _formatLlmWikiTimestamp(value) {
   if (!value) return 'Never';
   try { return new Date(value).toLocaleString(); }
@@ -3171,12 +3281,75 @@ function _renderInsights(d, box, wikiStatus) {
       </div>
     </div>`;
 
+  const totalTok = (d.total_input_tokens || 0) + (d.total_output_tokens || 0) + (d.total_cache_tokens || 0);
+  const meterMax = Math.max(totalTok, 1);
+  const pctInput  = Math.round(((d.total_input_tokens  || 0) / meterMax) * 100);
+  const pctOutput = Math.round(((d.total_output_tokens || 0) / meterMax) * 100);
+  const pctCache  = Math.round(((d.total_cache_tokens  || 0) / meterMax) * 100);
+  const hasCost = (d.total_cost || 0) > 0;
+  const fmtCost = v => v != null && v > 0 ? '$' + Number(v).toFixed(4) : '—';
+  const inputCost  = d.total_input_cost  != null ? fmtCost(d.total_input_cost)  : '—';
+  const outputCost = d.total_output_cost != null ? fmtCost(d.total_output_cost) : '—';
+  const totalCost  = fmtCost(d.total_cost);
+
+  const usageMeterHtml = `
+    <div class="insights-card insights-usage-meter">
+      <div class="insights-usage-meter-head">
+        <div class="insights-card-title">Usage Meter</div>
+        <span style="font-size:11px;color:var(--muted)">${fmtTokens(totalTok)} total tokens</span>
+      </div>
+      <div class="insights-usage-meter-bars">
+        <div class="insights-meter-row">
+          <span class="insights-meter-label">Input</span>
+          <div class="insights-meter-track"><div class="insights-meter-fill insights-meter-fill--input" style="width:${pctInput}%"></div></div>
+          <span class="insights-meter-value">${fmtTokens(d.total_input_tokens || 0)}</span>
+        </div>
+        <div class="insights-meter-row">
+          <span class="insights-meter-label">Output</span>
+          <div class="insights-meter-track"><div class="insights-meter-fill insights-meter-fill--output" style="width:${pctOutput}%"></div></div>
+          <span class="insights-meter-value">${fmtTokens(d.total_output_tokens || 0)}</span>
+        </div>
+        ${(d.total_cache_tokens || 0) > 0 ? `
+        <div class="insights-meter-row">
+          <span class="insights-meter-label">Cache</span>
+          <div class="insights-meter-track"><div class="insights-meter-fill insights-meter-fill--cache" style="width:${pctCache}%"></div></div>
+          <span class="insights-meter-value">${fmtTokens(d.total_cache_tokens || 0)}</span>
+        </div>` : ''}
+      </div>
+    </div>`;
+
+  const costLedgerHtml = `
+    <div class="insights-card insights-cost-ledger">
+      <div class="insights-card-title">Cost Ledger <span style="font-weight:400;font-size:11px;color:var(--muted)">${d.period_days || 30}-day window</span></div>
+      <div class="insights-cost-row">
+        <span class="insights-cost-label">Input tokens</span>
+        <span class="insights-cost-value">${inputCost}</span>
+      </div>
+      <div class="insights-cost-row">
+        <span class="insights-cost-label">Output tokens</span>
+        <span class="insights-cost-value">${outputCost}</span>
+      </div>
+      ${(d.total_cache_tokens || 0) > 0 ? `
+      <div class="insights-cost-row">
+        <span class="insights-cost-label">Cache read</span>
+        <span class="insights-cost-value">${fmtCost(d.total_cache_cost)}</span>
+      </div>` : ''}
+      <div class="insights-cost-divider"></div>
+      <div class="insights-cost-row">
+        <span class="insights-cost-label" style="font-weight:700;color:var(--text)">Total estimated</span>
+        <span class="insights-cost-value accent" style="font-size:14px">${totalCost}</span>
+      </div>
+      ${!hasCost ? `<div style="font-size:11px;color:var(--muted);margin-top:6px">Cost data appears once models with known pricing are used. Per-model breakdown is available in the table below.</div>` : ''}
+    </div>`;
+
   box.innerHTML = `
     ${_renderSystemHealthPanel()}
     ${_renderLlmWikiStatus(wikiStatus)}
     <div class="insights-grid">
       ${overviewCards.map(c => `<div class="insights-stat"><div class="insights-stat-icon">${c.icon}</div><div class="insights-stat-info"><div class="insights-stat-value">${c.value}</div><div class="insights-stat-label">${esc(c.label)}</div></div></div>`).join('')}
     </div>
+    ${usageMeterHtml}
+    ${costLedgerHtml}
     ${dailyHtml}
     <div class="insights-row insights-usage-grid">
       ${tokenCards}
