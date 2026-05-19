@@ -137,6 +137,24 @@
     <span class="app-titlebar-title" id="appTitlebarTitle">Hermes</span>
     <span class="app-titlebar-sub" id="appTitlebarSub" hidden></span>
   </div>
+  <div class="provider-selector" id="providerSelector">
+    <button class="provider-selector-btn" id="providerSelectorBtn" data-provider="hermes" onclick="toggleProviderMenu(event)" title="Switch provider" aria-haspopup="true" aria-expanded="false">
+      <span class="provider-selector-dot"></span>
+      <span id="providerSelectorLabel">Hermes</span>
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    <div class="provider-selector-menu" id="providerSelectorMenu" style="display:none" role="menu">
+      <div class="provider-selector-item active" data-p="hermes" onclick="switchProvider('hermes')" role="menuitem">
+        <span class="provider-selector-item-dot"></span>Hermes
+      </div>
+      <div class="provider-selector-item" data-p="claude" onclick="switchProvider('claude')" role="menuitem">
+        <span class="provider-selector-item-dot"></span>Claude
+      </div>
+      <div class="provider-selector-item" data-p="cursor" role="menuitem">
+        <span class="provider-selector-item-dot"></span>Cursor<span class="provider-selector-item-tag">soon</span>
+      </div>
+    </div>
+  </div>
   <div class="app-titlebar-spacer" aria-hidden="true"></div>
 </header>
 <div class="layout">
@@ -153,6 +171,10 @@
     <button class="rail-btn nav-tab dashboard-link has-tooltip" id="dashboardRailBtn" data-dashboard-link style="display:none" onclick="openHermesDashboard(event)" data-tooltip="Hermes Dashboard" data-i18n-title="tab_dashboard" aria-label="Hermes Dashboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg><span class="dashboard-external-badge" aria-hidden="true"></span></button>
     <button class="rail-btn nav-tab has-tooltip" data-panel="logs" onclick="switchPanel('logs',{fromRailClick:true})" data-tooltip="Logs" data-i18n-title="tab_logs" aria-label="Logs"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/></svg></button>
     <button class="rail-btn nav-tab has-tooltip" data-panel="swarm" onclick="switchPanel('swarm',{fromRailClick:true})" data-tooltip="Mission Control" aria-label="Mission Control"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="12" y1="7" x2="5.7" y2="17.2"/><line x1="12" y1="7" x2="18.3" y2="17.2"/><line x1="6.8" y1="19" x2="17.2" y2="19"/></svg></button>
+    <button class="rail-btn nav-tab has-tooltip claude-only" data-panel="claude-chat" onclick="switchPanel('claude-chat',{fromRailClick:true})" data-tooltip="Claude Chat" aria-label="Claude Chat"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
+    <button class="rail-btn nav-tab has-tooltip claude-only" data-panel="claude-batches" onclick="switchPanel('claude-batches',{fromRailClick:true})" data-tooltip="Batches" aria-label="Batches"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 3H8a2 2 0 0 0-2 2v2"/><path d="M7 12h10"/><path d="M7 16h6"/></svg></button>
+    <button class="rail-btn nav-tab has-tooltip claude-only" data-panel="claude-files" onclick="switchPanel('claude-files',{fromRailClick:true})" data-tooltip="Files" aria-label="Files"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>
+    <button class="rail-btn nav-tab has-tooltip claude-only" data-panel="claude-admin" onclick="switchPanel('claude-admin',{fromRailClick:true})" data-tooltip="Usage &amp; Admin" aria-label="Usage &amp; Admin"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg></button>
     <div class="rail-spacer"></div>
     <button class="rail-btn nav-tab has-tooltip" data-panel="settings" onclick="switchPanel('settings',{fromRailClick:true})" data-tooltip="Settings" data-i18n-title="tab_settings" aria-label="Settings"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   </nav>
@@ -171,6 +193,10 @@
       <button class="nav-tab dashboard-link has-tooltip has-tooltip--bottom" id="dashboardMobileBtn" data-dashboard-link data-label="Dashboard" style="display:none" onclick="openHermesDashboard(event)" data-tooltip="Hermes Dashboard" data-i18n-title="tab_dashboard"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg><span class="dashboard-external-badge" aria-hidden="true"></span></button>
       <button class="nav-tab has-tooltip has-tooltip--bottom" data-panel="logs" data-label="Logs" onclick="switchPanel('logs',{fromRailClick:true})" data-tooltip="Logs" data-i18n-title="tab_logs"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/></svg></button>
       <button class="nav-tab has-tooltip has-tooltip--bottom" data-panel="swarm" data-label="Swarm" onclick="switchPanel('swarm',{fromRailClick:true})" data-tooltip="Mission Control" aria-label="Mission Control"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="12" y1="7" x2="5.7" y2="17.2"/><line x1="12" y1="7" x2="18.3" y2="17.2"/><line x1="6.8" y1="19" x2="17.2" y2="19"/></svg></button>
+      <button class="nav-tab has-tooltip has-tooltip--bottom claude-only" data-panel="claude-chat" data-label="Chat" onclick="switchPanel('claude-chat',{fromRailClick:true})" data-tooltip="Claude Chat"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
+      <button class="nav-tab has-tooltip has-tooltip--bottom claude-only" data-panel="claude-batches" data-label="Batches" onclick="switchPanel('claude-batches',{fromRailClick:true})" data-tooltip="Batches"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 3H8a2 2 0 0 0-2 2v2"/><path d="M7 12h10"/><path d="M7 16h6"/></svg></button>
+      <button class="nav-tab has-tooltip has-tooltip--bottom claude-only" data-panel="claude-files" data-label="Files" onclick="switchPanel('claude-files',{fromRailClick:true})" data-tooltip="Files"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>
+      <button class="nav-tab has-tooltip has-tooltip--bottom claude-only" data-panel="claude-admin" data-label="Admin" onclick="switchPanel('claude-admin',{fromRailClick:true})" data-tooltip="Usage &amp; Admin"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg></button>
       <!-- Settings button mirrored here for mobile (rail is desktop-only via @media >=768px). Keep in sync with rail entry. -->
       <button class="nav-tab has-tooltip has-tooltip--bottom" data-panel="settings" onclick="switchPanel('settings',{fromRailClick:true})" data-tooltip="Settings" data-i18n-title="tab_settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
     </div>
@@ -334,6 +360,46 @@
       </div>
       <div class="panel-head-sub" style="padding:0 12px 8px;font-size:11px;color:var(--muted)">Agent fleet &amp; mission dispatch</div>
       <div id="swarmAgentList" style="flex:1;overflow-y:auto;padding:8px"><div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div></div>
+    </div>
+    <!-- Claude Chat panel -->
+    <div class="panel-view" id="panelClaudeChat">
+      <div class="panel-head">
+        <span>Claude Chat</span>
+        <div class="panel-head-actions">
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom" onclick="startNewClaudeChat()" data-tooltip="New chat" aria-label="New chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+        </div>
+      </div>
+      <div id="claudeChatList" style="flex:1;overflow-y:auto;padding:8px"><div style="padding:12px;color:var(--muted);font-size:12px">Start a new chat above.</div></div>
+    </div>
+    <!-- Claude Batches panel -->
+    <div class="panel-view" id="panelClaudeBatches">
+      <div class="panel-head">
+        <span>Batches</span>
+        <div class="panel-head-actions">
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom" onclick="loadClaudeBatches(true)" data-tooltip="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+        </div>
+      </div>
+      <div id="claudeBatchesList" style="flex:1;overflow-y:auto;padding:8px"><div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div></div>
+    </div>
+    <!-- Claude Files panel -->
+    <div class="panel-view" id="panelClaudeFiles">
+      <div class="panel-head">
+        <span>Files</span>
+        <div class="panel-head-actions">
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom" onclick="loadClaudeFiles(true)" data-tooltip="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+        </div>
+      </div>
+      <div id="claudeFilesList" style="flex:1;overflow-y:auto;padding:8px"><div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div></div>
+    </div>
+    <!-- Claude Admin panel -->
+    <div class="panel-view" id="panelClaudeAdmin">
+      <div class="panel-head">
+        <span>Usage &amp; Admin</span>
+        <div class="panel-head-actions">
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom" onclick="loadClaudeAdmin(true)" data-tooltip="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+        </div>
+      </div>
+      <div id="claudeAdminSidebar" style="flex:1;overflow-y:auto;padding:8px"><div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div></div>
     </div>
     <!-- Settings panel (menu list; actual panes render in .main) -->
     <div class="panel-view" id="panelSettings">
@@ -885,6 +951,71 @@
         <div class="main-view-content logs-content">
           <div class="logs-output" id="logsOutput"><div class="logs-empty" data-i18n="logs_empty">No log lines yet.</div></div>
         </div>
+      </div>
+    </div>
+    <!-- Claude Chat main view -->
+    <div id="mainClaudeChat" class="main-view">
+      <div class="claude-chat-model-bar">
+        <label for="claudeChatModel" style="font-size:11px;color:var(--muted)">Model</label>
+        <select id="claudeChatModel">
+          <option value="claude-opus-4-5">claude-opus-4-5</option>
+          <option value="claude-sonnet-4-5" selected>claude-sonnet-4-5</option>
+          <option value="claude-haiku-3-5">claude-haiku-3-5</option>
+        </select>
+        <span style="margin-left:auto;font-size:11px;color:var(--muted)" id="claudeChatStatus"></span>
+      </div>
+      <div class="claude-chat-area">
+        <div class="claude-chat-messages" id="claudeChatMessages">
+          <div class="claude-empty">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span>Start a conversation with Claude.</span>
+          </div>
+        </div>
+        <div class="claude-chat-composer">
+          <textarea id="claudeChatInput" placeholder="Message Claude…" rows="2" onkeydown="claudeChatKeydown(event)"></textarea>
+          <button class="sm-btn" onclick="sendClaudeChat()" id="claudeChatSendBtn" style="align-self:flex-end">Send</button>
+        </div>
+      </div>
+    </div>
+    <!-- Claude Batches main view -->
+    <div id="mainClaudeBatches" class="main-view">
+      <div class="main-view-header">
+        <div class="main-view-title">Message Batches</div>
+        <div class="main-view-actions">
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom" onclick="loadClaudeBatches(true)" data-tooltip="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+        </div>
+      </div>
+      <div class="claude-panel-body" id="claudeBatchesBody">
+        <div class="claude-empty">Loading batches…</div>
+      </div>
+    </div>
+    <!-- Claude Files main view -->
+    <div id="mainClaudeFiles" class="main-view">
+      <div class="main-view-header">
+        <div class="main-view-title">Files API</div>
+        <div class="main-view-actions">
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom" onclick="loadClaudeFiles(true)" data-tooltip="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+        </div>
+      </div>
+      <div class="claude-panel-toolbar">
+        <input type="file" id="claudeFileUploadInput" style="display:none" onchange="uploadClaudeFile(this.files[0])">
+        <button class="sm-btn" onclick="document.getElementById('claudeFileUploadInput').click()">Upload file</button>
+        <span id="claudeFileUploadStatus" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+      <div class="claude-panel-body" id="claudeFilesBody">
+        <div class="claude-empty">Loading files…</div>
+      </div>
+    </div>
+    <!-- Claude Admin / Usage main view -->
+    <div id="mainClaudeAdmin" class="main-view">
+      <div class="main-view-header">
+        <div class="main-view-title">Usage &amp; Admin</div>
+        <div class="main-view-actions">
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom" onclick="loadClaudeAdmin(true)" data-tooltip="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+        </div>
+      </div>
+      <div class="claude-panel-body" id="claudeAdminBody">
+        <div class="claude-empty">Loading usage data…</div>
       </div>
     </div>
     <div id="mainSettings" class="main-view">

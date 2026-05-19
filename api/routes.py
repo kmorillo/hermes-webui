@@ -4360,6 +4360,42 @@ def handle_get(handler, parsed) -> bool:
             logger.exception("rollback/diff failed")
             return bad(handler, str(e), status=500)
 
+    # ── Claude / Anthropic proxy routes (GET) ─────────────────────────────────
+    if parsed.path.startswith("/api/claude/"):
+        from api.config import load_settings
+        from api.providers.anthropic_adapter import (
+            cancel_batch, create_message, get_batch, get_batch_results,
+            get_file_metadata, get_usage, list_batches, list_files, list_models,
+        )
+        _cl_settings = load_settings()
+        _cl_path = parsed.path[len("/api/claude"):]
+
+        if _cl_path == "/models":
+            return j(handler, list_models(_cl_settings))
+
+        if _cl_path == "/batches":
+            return j(handler, list_batches(_cl_settings))
+
+        if _cl_path.startswith("/batches/") and _cl_path.endswith("/results"):
+            batch_id = _cl_path[len("/batches/"):-len("/results")]
+            return j(handler, get_batch_results(batch_id, _cl_settings))
+
+        if _cl_path.startswith("/batches/") and not _cl_path.endswith("/cancel"):
+            batch_id = _cl_path[len("/batches/"):]
+            return j(handler, get_batch(batch_id, _cl_settings))
+
+        if _cl_path == "/files":
+            return j(handler, list_files(_cl_settings))
+
+        if _cl_path.startswith("/files/"):
+            file_id = _cl_path[len("/files/"):]
+            return j(handler, get_file_metadata(file_id, _cl_settings))
+
+        if _cl_path == "/usage":
+            return j(handler, get_usage(_cl_settings))
+
+        return j(handler, {"error": "not_found"}, status=404)
+
     return False  # 404
 
 
@@ -5864,6 +5900,41 @@ def handle_post(handler, parsed) -> bool:
             logger.exception("rollback/restore failed")
             return bad(handler, str(e), status=500)
 
+    # ── Claude / Anthropic proxy routes (POST) ────────────────────────────────
+    if parsed.path.startswith("/api/claude/"):
+        from api.config import load_settings
+        from api.providers.anthropic_adapter import (
+            cancel_batch, create_batch, create_message, upload_file,
+        )
+        from api.upload import parse_multipart
+        _cl_settings = load_settings()
+        _cl_path = parsed.path[len("/api/claude"):]
+
+        if _cl_path == "/messages":
+            payload = json.loads(body) if body else {}
+            return j(handler, create_message(payload, _cl_settings))
+
+        if _cl_path == "/batches":
+            payload = json.loads(body) if body else {}
+            return j(handler, create_batch(payload, _cl_settings))
+
+        if _cl_path.startswith("/batches/") and _cl_path.endswith("/cancel"):
+            batch_id = _cl_path[len("/batches/"):-len("/cancel")]
+            return j(handler, cancel_batch(batch_id, _cl_settings))
+
+        if _cl_path == "/files/upload":
+            ct = handler.headers.get("Content-Type", "")
+            parts = parse_multipart(body, ct)
+            file_part = parts.get("file") if parts else None
+            if not file_part:
+                return bad(handler, "missing file part")
+            fname = file_part.get("filename", "upload.bin")
+            fdata = file_part.get("data", b"")
+            fmime = file_part.get("content_type", "application/octet-stream")
+            return j(handler, upload_file(fname, fdata, fmime, _cl_settings))
+
+        return j(handler, {"error": "not_found"}, status=404)
+
     return False  # 404
 
 
@@ -5894,6 +5965,20 @@ def handle_delete(handler, parsed) -> bool:
         if result is False:
             return _kanban_unknown_endpoint(handler, parsed, "DELETE")
         return True
+
+    # ── Claude / Anthropic proxy routes (DELETE) ──────────────────────────────
+    if parsed.path.startswith("/api/claude/"):
+        from api.config import load_settings
+        from api.providers.anthropic_adapter import delete_file
+        _cl_settings = load_settings()
+        _cl_path = parsed.path[len("/api/claude"):]
+
+        if _cl_path.startswith("/files/"):
+            file_id = _cl_path[len("/files/"):]
+            return j(handler, delete_file(file_id, _cl_settings))
+
+        return j(handler, {"error": "not_found"}, status=404)
+
     return False
 
 # ── GET route helpers ─────────────────────────────────────────────────────────
