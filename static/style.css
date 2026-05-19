@@ -2616,6 +2616,12 @@ body.provider-claude .sidebar-nav .nav-tab:not(.claude-only):not([data-panel="se
 .claude-admin-table tr:last-child td{border-bottom:none;}
 .claude-admin-table tr:hover td{background:var(--surface-hover,rgba(255,255,255,.04));}
 .claude-section-head{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;padding:4px 0 8px;}
+.claude-file-drop-zone{display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:2px dashed var(--border2);font-size:12px;color:var(--muted);cursor:pointer;transition:background .15s,border-color .15s;user-select:none;}
+.claude-file-drop-zone:hover,.claude-file-drop-zone.drag-over{background:var(--code-bg);border-color:var(--accent);color:var(--text);}
+.claude-admin-table th.sortable{cursor:pointer;user-select:none;}
+.claude-admin-table th.sortable:hover{color:var(--text);}
+.claude-admin-table th.sort-asc::after{content:' ▲';}
+.claude-admin-table th.sort-desc::after{content:' ▼';}
 
 /* ── Settings providers — Claude key row ─────────────────────────────────── */
 .claude-key-row{display:flex;flex-direction:column;gap:4px;padding:14px 0;border-bottom:1px solid var(--border);}

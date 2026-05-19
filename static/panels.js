@@ -7180,6 +7180,7 @@ function _initProvider() {
 
 function _applyProvider(name, save) {
   _currentProvider = name;
+  try { if (!window.S) window.S = {}; window.S.provider = name; } catch(_) {}
   if (save) {
     try { localStorage.setItem('hermes-provider', name); } catch(_) {}
   }
@@ -7438,7 +7439,12 @@ async function loadClaudeBatches(refresh) {
           <option value="claude-haiku-3-5">claude-haiku-3-5</option>
           <option value="claude-opus-4-5">claude-opus-4-5</option>
         </select>
-        <label style="font-size:11px;color:var(--muted)">Requests JSON array (each: {custom_id, params: {messages, max_tokens}})</label>
+        <label style="font-size:11px;color:var(--muted)">Drop a .jsonl file or paste JSON array below</label>
+        <div id="claudeBatchJsonlDrop" class="claude-file-drop-zone" style="margin-bottom:2px" onclick="document.getElementById('claudeBatchJsonlInput').click()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Drop .jsonl file here
+          <input type="file" id="claudeBatchJsonlInput" style="display:none" accept=".jsonl,.json" onchange="_loadJsonlFile(this.files[0])">
+        </div>
         <textarea id="claudeBatchRequestsTA" rows="5" style="padding:8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-size:11px;font-family:ui-monospace,monospace;resize:vertical" placeholder='[{"custom_id":"req-1","params":{"model":"claude-sonnet-4-5","max_tokens":256,"messages":[{"role":"user","content":"Hello"}]}}]'></textarea>
         <div style="display:flex;gap:8px;align-items:center">
           <button class="sm-btn" onclick="submitClaudeBatch()">Submit batch</button>
@@ -7446,6 +7452,16 @@ async function loadClaudeBatches(refresh) {
         </div>
       </div>
     </details>`;
+    // Wire JSONL drop zone after rendering (deferred so the DOM is present)
+    setTimeout(() => {
+      const dropZone = document.getElementById('claudeBatchJsonlDrop');
+      if (dropZone && !dropZone._dndReady) {
+        dropZone._dndReady = true;
+        dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+        dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); _loadJsonlFile(e.dataTransfer.files[0]); });
+      }
+    }, 0);
     if (batches.length === 0) {
       if (bodyEl) bodyEl.innerHTML = newBatchForm + '<div class="claude-empty">No batches yet.</div>';
       if (list) list.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">No batches.</div>';
@@ -7474,6 +7490,31 @@ async function loadClaudeBatches(refresh) {
   } catch(e) {
     if (bodyEl) bodyEl.innerHTML = `<div class="claude-empty" style="color:var(--accent)">${esc(e.message)}</div>`;
   }
+}
+
+function _loadJsonlFile(file) {
+  if (!file) return;
+  const ta = document.getElementById('claudeBatchRequestsTA');
+  const statusEl = document.getElementById('claudeBatchSubmitStatus');
+  const reader = new FileReader();
+  reader.onload = evt => {
+    const text = (evt.target.result || '').trim();
+    // JSONL: each line is a JSON object — convert to array
+    if (file.name.endsWith('.jsonl')) {
+      try {
+        const lines = text.split('\n').filter(l => l.trim());
+        const arr = lines.map(l => JSON.parse(l));
+        if (ta) ta.value = JSON.stringify(arr, null, 2);
+        if (statusEl) statusEl.textContent = `Loaded ${arr.length} request(s) from ${file.name}`;
+      } catch(e) {
+        if (statusEl) statusEl.textContent = 'Parse error: ' + e.message;
+      }
+    } else {
+      if (ta) ta.value = text;
+      if (statusEl) statusEl.textContent = `Loaded ${file.name}`;
+    }
+  };
+  reader.readAsText(file);
 }
 
 async function submitClaudeBatch() {
@@ -7539,7 +7580,22 @@ async function downloadClaudeBatchResults(batchId) {
 
 const _fmtBytes = n => n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(1) + ' MB';
 
+function _initClaudeFileDrop() {
+  const zone = document.getElementById('claudeFileDrop');
+  if (!zone || zone._dndReady) return;
+  zone._dndReady = true;
+  zone.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault(); e.stopPropagation();
+    zone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) uploadClaudeFile(file);
+  });
+}
+
 async function loadClaudeFiles(refresh) {
+  _initClaudeFileDrop();
   const bodyEl = document.getElementById('claudeFilesBody');
   const list = document.getElementById('claudeFilesList');
   if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">Loading…</div>';
@@ -7591,7 +7647,7 @@ async function deleteClaudeFile(fileId) {
 async function uploadClaudeFile(file) {
   const statusEl = document.getElementById('claudeFileUploadStatus');
   if (!file) return;
-  if (statusEl) statusEl.textContent = 'Uploading…';
+  if (statusEl) { statusEl.textContent = 'Uploading…'; statusEl.style.display = ''; }
   try {
     const fd = new FormData();
     fd.append('file', file, file.name);
@@ -7601,14 +7657,15 @@ async function uploadClaudeFile(file) {
     const fetchResp = await fetch('/api/claude/files', {method: 'POST', body: fd, headers: fetchHeaders});
     const resp = await fetchResp.json();
     if (resp && resp.ok && resp.data && resp.data.id) {
-      if (statusEl) statusEl.textContent = 'Uploaded: ' + (resp.data.filename || resp.data.id);
+      if (statusEl) { statusEl.textContent = 'Uploaded: ' + (resp.data.filename || resp.data.id); statusEl.style.display = ''; }
       await loadClaudeFiles(true);
+      setTimeout(() => { if (statusEl) statusEl.style.display = 'none'; }, 3000);
     } else {
       const errMsg = resp.error || 'Upload failed';
-      if (statusEl) statusEl.textContent = String(errMsg);
+      if (statusEl) { statusEl.textContent = String(errMsg); statusEl.style.display = ''; }
     }
   } catch(e) {
-    if (statusEl) statusEl.textContent = 'Error: ' + e.message;
+    if (statusEl) { statusEl.textContent = 'Error: ' + e.message; statusEl.style.display = ''; }
   }
   const inp = document.getElementById('claudeFileUploadInput');
   if (inp) inp.value = '';
@@ -7616,20 +7673,45 @@ async function uploadClaudeFile(file) {
 
 // ── Claude Admin / Usage ──────────────────────────────────────────────────────
 
+// Sortable users table state
+let _adminUserSort = {col: 0, dir: 1};
+
+function _sortClaudeUsers(col) {
+  if (_adminUserSort.col === col) _adminUserSort.dir *= -1;
+  else { _adminUserSort.col = col; _adminUserSort.dir = 1; }
+  const tbody = document.getElementById('claudeUsersTableBody');
+  const ths = document.querySelectorAll('#claudeUsersTable thead th');
+  if (!tbody) return;
+  ths.forEach((th, i) => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (i === col) th.classList.add(_adminUserSort.dir === 1 ? 'sort-asc' : 'sort-desc');
+  });
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  const keys = ['name', 'role', 'added'];
+  rows.sort((a, b) => {
+    const av = a.dataset[keys[col]] || '';
+    const bv = b.dataset[keys[col]] || '';
+    return av.localeCompare(bv) * _adminUserSort.dir;
+  });
+  rows.forEach(r => tbody.appendChild(r));
+}
+
 async function loadClaudeAdmin(refresh) {
   const bodyEl = document.getElementById('claudeAdminBody');
   const sideEl = document.getElementById('claudeAdminSidebar');
   if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">Loading…</div>';
   if (sideEl) sideEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div>';
   const fmtNum = n => n >= 1e6 ? (n/1e6).toFixed(2)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
+  const fmtCost = v => v != null ? '$' + Number(v).toFixed(4) : '—';
   const fmtErr = msg => {
     if (String(msg).includes('no_admin_key') || String(msg).includes('admin_key_required'))
       return 'An admin API key (sk-ant-admin…) is required. Add it in Settings → Providers.';
     return msg;
   };
   try {
-    const [usageResp, orgResp, usersResp, ccResp] = await Promise.all([
+    const [usageResp, wsResp, orgResp, usersResp, ccResp] = await Promise.all([
       api('/api/claude/usage?granularity=day'),
+      api('/api/claude/usage?group_by=workspace').catch(() => ({ok:false,data:[],error:''})),
       api('/api/claude/admin/org').catch(() => ({ok:false,data:{},error:''})),
       api('/api/claude/admin/users').catch(() => ({ok:false,data:[],error:''})),
       api('/api/claude/usage/claude_code').catch(() => ({ok:false,data:[],error:''})),
@@ -7641,8 +7723,12 @@ async function loadClaudeAdmin(refresh) {
     }
     const usageData = usageResp.data || {};
     const usage = Array.isArray(usageData) ? usageData : (usageData.data || []);
-    let totalIn = 0, totalOut = 0;
-    usage.forEach(u => { totalIn += (u.input_tokens || 0); totalOut += (u.output_tokens || 0); });
+    let totalIn = 0, totalOut = 0, totalCost = 0;
+    usage.forEach(u => {
+      totalIn  += (u.input_tokens  || 0);
+      totalOut += (u.output_tokens || 0);
+      totalCost += (u.total_cost   || 0);
+    });
 
     // Org info
     const org = orgResp.ok ? (orgResp.data || {}) : {};
@@ -7654,17 +7740,41 @@ async function loadClaudeAdmin(refresh) {
         ${org.id ? `<div class="claude-admin-stat"><div class="claude-admin-stat-label">Org ID</div><div class="claude-admin-stat-value" style="font-size:11px">${esc(org.id)}</div></div>` : ''}
       </div>` : '';
 
-    // Users table
+    // Workspace-grouped usage
+    const wsRaw = wsResp.ok ? (wsResp.data || []) : [];
+    const wsRows = Array.isArray(wsRaw) ? wsRaw : (wsRaw.data || []);
+    const wsHtml = wsRows.length ? `
+      <div class="claude-section-head" style="margin-top:16px">Usage by Workspace</div>
+      <table class="claude-admin-table">
+        <thead><tr><th>Workspace</th><th>In</th><th>Out</th><th>Cost</th></tr></thead>
+        <tbody>${wsRows.map(w => `<tr>
+          <td>${esc(w.workspace_name || w.workspace_id || '—')}</td>
+          <td>${fmtNum(w.input_tokens || 0)}</td>
+          <td>${fmtNum(w.output_tokens || 0)}</td>
+          <td>${fmtCost(w.total_cost)}</td>
+        </tr>`).join('')}</tbody>
+      </table>` : '';
+
+    // Users table — sortable
     const users = usersResp.ok ? (Array.isArray(usersResp.data) ? usersResp.data : (usersResp.data?.data || [])) : [];
     const usersHtml = users.length ? `
       <div class="claude-section-head" style="margin-top:16px">Users (${users.length})</div>
-      <table class="claude-admin-table">
-        <thead><tr><th>Name / Email</th><th>Role</th><th>Added</th></tr></thead>
-        <tbody>${users.slice(0,50).map(u => `<tr>
-          <td>${esc(u.name || u.email || u.id || '—')}</td>
-          <td>${esc(u.role || '—')}</td>
-          <td>${u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</td>
-        </tr>`).join('')}</tbody>
+      <table class="claude-admin-table" id="claudeUsersTable">
+        <thead><tr>
+          <th class="sortable sort-asc" onclick="_sortClaudeUsers(0)">Name / Email</th>
+          <th class="sortable" onclick="_sortClaudeUsers(1)">Role</th>
+          <th class="sortable" onclick="_sortClaudeUsers(2)">Added</th>
+        </tr></thead>
+        <tbody id="claudeUsersTableBody">${users.slice(0,100).map(u => {
+          const name = u.name || u.email || u.id || '—';
+          const role = u.role || '—';
+          const added = u.created_at ? new Date(u.created_at).toLocaleDateString() : '—';
+          return `<tr data-name="${esc(name)}" data-role="${esc(role)}" data-added="${esc(added)}">
+            <td>${esc(name)}</td>
+            <td>${esc(role)}</td>
+            <td>${esc(added)}</td>
+          </tr>`;
+        }).join('')}</tbody>
       </table>` : '';
 
     // Claude Code analytics
@@ -7677,19 +7787,20 @@ async function loadClaudeAdmin(refresh) {
           <td>${r.period_start ? new Date(r.period_start).toLocaleDateString() : '—'}</td>
           <td>${fmtNum(r.input_tokens || 0)}</td>
           <td>${fmtNum(r.output_tokens || 0)}</td>
-          <td>${r.total_cost != null ? '$'+Number(r.total_cost).toFixed(4) : '—'}</td>
+          <td>${fmtCost(r.total_cost)}</td>
         </tr>`).join('')}</tbody>
       </table>` : '';
 
-    // Usage by period
+    // Usage by day
     const usageHtml = usage.length ? `
       <div class="claude-section-head" style="margin-top:16px">Usage by Day</div>
       <table class="claude-admin-table">
-        <thead><tr><th>Date</th><th>In</th><th>Out</th></tr></thead>
+        <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Cost</th></tr></thead>
         <tbody>${usage.slice(0,30).map(u => `<tr>
           <td>${u.period_start ? new Date(u.period_start).toLocaleDateString() : '—'}</td>
           <td>${fmtNum(u.input_tokens || 0)}</td>
           <td>${fmtNum(u.output_tokens || 0)}</td>
+          <td>${fmtCost(u.total_cost)}</td>
         </tr>`).join('')}</tbody>
       </table>` : '<div class="claude-empty">No usage data found.</div>';
 
@@ -7698,15 +7809,17 @@ async function loadClaudeAdmin(refresh) {
       <div class="claude-admin-grid">
         <div class="claude-admin-stat"><div class="claude-admin-stat-label">Total input tokens</div><div class="claude-admin-stat-value">${fmtNum(totalIn)}</div></div>
         <div class="claude-admin-stat"><div class="claude-admin-stat-label">Total output tokens</div><div class="claude-admin-stat-value">${fmtNum(totalOut)}</div></div>
-        <div class="claude-admin-stat"><div class="claude-admin-stat-label">Usage records</div><div class="claude-admin-stat-value">${usage.length}</div></div>
+        <div class="claude-admin-stat"><div class="claude-admin-stat-label">Estimated cost</div><div class="claude-admin-stat-value">${totalCost ? '$'+totalCost.toFixed(4) : '—'}</div></div>
         ${users.length ? `<div class="claude-admin-stat"><div class="claude-admin-stat-label">Team members</div><div class="claude-admin-stat-value">${users.length}</div></div>` : ''}
       </div>
-      ${orgHtml}${usersHtml}${ccHtml}${usageHtml}`;
+      ${orgHtml}${wsHtml}${usersHtml}${ccHtml}${usageHtml}`;
     if (sideEl) sideEl.innerHTML = `<div style="padding:8px 12px;font-size:12px">
       ${org.name ? `<div style="font-weight:600;margin-bottom:8px">${esc(org.name)}</div>` : ''}
       <div style="color:var(--muted);font-size:11px">In tokens</div><div style="font-weight:600">${fmtNum(totalIn)}</div>
       <div style="color:var(--muted);font-size:11px;margin-top:8px">Out tokens</div><div style="font-weight:600">${fmtNum(totalOut)}</div>
+      ${totalCost ? `<div style="color:var(--muted);font-size:11px;margin-top:8px">Est. cost</div><div style="font-weight:600">$${totalCost.toFixed(4)}</div>` : ''}
       ${users.length ? `<div style="color:var(--muted);font-size:11px;margin-top:8px">Team</div><div style="font-weight:600">${users.length} members</div>` : ''}
+      ${wsRows.length ? `<div style="color:var(--muted);font-size:11px;margin-top:8px">Workspaces</div><div style="font-weight:600">${wsRows.length}</div>` : ''}
     </div>`;
   } catch(e) {
     if (bodyEl) bodyEl.innerHTML = `<div class="claude-empty" style="color:var(--accent)">${esc(e.message)}</div>`;
