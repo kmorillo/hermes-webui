@@ -218,7 +218,8 @@ async function switchPanel(name, opts = {}) {
   if (typeof _syncSidebarAria === 'function') _syncSidebarAria();
   // Update panel views
   document.querySelectorAll('.panel-view').forEach(p => p.classList.remove('active'));
-  const panelEl = $('panel' + nextPanel.charAt(0).toUpperCase() + nextPanel.slice(1));
+  const _panelDomId = n => 'panel' + n.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('');
+  const panelEl = $(_panelDomId(nextPanel));
   if (panelEl) panelEl.classList.add('active');
   // Update main content view. Each entry in MAIN_VIEW_PANELS gets a matching
   // showing-<name> class on <main>; no class means chat (the default).
@@ -2916,6 +2917,41 @@ async function loadInsights(animate) {
   if (animate && refreshBtn) {
     refreshBtn.style.opacity = '0.5';
     refreshBtn.disabled = true;
+  }
+  // When Claude provider is active, show Claude usage summary instead of Hermes insights
+  if (_currentProvider === 'claude') {
+    try {
+      const resp = await api('/api/claude/usage?granularity=day');
+      if (!resp.ok) {
+        box.innerHTML = `<div style="color:var(--accent);font-size:12px;padding:16px">${esc(resp.error || 'Claude insights unavailable — set an admin key in Settings → Providers.')}</div>`;
+        return;
+      }
+      const usage = Array.isArray(resp.data) ? resp.data : (resp.data?.data || []);
+      let totalIn = 0, totalOut = 0;
+      usage.forEach(u => { totalIn += (u.input_tokens || 0); totalOut += (u.output_tokens || 0); });
+      const fmtN = n => n >= 1e6 ? (n/1e6).toFixed(2)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
+      box.innerHTML = `<div style="padding:16px">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:12px">Claude Usage (last 30 days)</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px">
+          <div class="claude-admin-stat"><div class="claude-admin-stat-label">Input tokens</div><div class="claude-admin-stat-value">${fmtN(totalIn)}</div></div>
+          <div class="claude-admin-stat"><div class="claude-admin-stat-label">Output tokens</div><div class="claude-admin-stat-value">${fmtN(totalOut)}</div></div>
+          <div class="claude-admin-stat"><div class="claude-admin-stat-label">Days tracked</div><div class="claude-admin-stat-value">${usage.length}</div></div>
+        </div>
+        ${usage.length ? `<table class="claude-admin-table">
+          <thead><tr><th>Date</th><th>In</th><th>Out</th></tr></thead>
+          <tbody>${usage.slice(0,30).map(u=>`<tr>
+            <td>${u.period_start?new Date(u.period_start).toLocaleDateString():'—'}</td>
+            <td>${fmtN(u.input_tokens||0)}</td>
+            <td>${fmtN(u.output_tokens||0)}</td>
+          </tr>`).join('')}</tbody>
+        </table>` : ''}
+      </div>`;
+    } catch(e) {
+      box.innerHTML = `<div style="color:var(--accent);font-size:12px;padding:16px">${esc(e.message)}</div>`;
+    } finally {
+      if (animate && refreshBtn) { refreshBtn.style.opacity = ''; refreshBtn.disabled = false; }
+    }
+    return;
   }
   const period = ($('insightsPeriod') || {}).value || '30';
   try {
@@ -7086,6 +7122,18 @@ async function _restoreCheckpoint(workspace,checkpoint,message){
 
 // ── Provider selector ─────────────────────────────────────────────────────────
 
+function _updateClaudeAdminNavState(hasAdminKey) {
+  document.querySelectorAll('[data-panel="claude-admin"]').forEach(btn => {
+    if (hasAdminKey) {
+      btn.style.opacity = '';
+      btn.title = '';
+    } else {
+      btn.style.opacity = '0.5';
+      btn.title = 'Admin key not configured — add it in Settings → Providers';
+    }
+  });
+}
+
 let _currentProvider = localStorage.getItem('hermes-provider') || 'hermes';
 
 function _initProvider() {
@@ -7113,6 +7161,13 @@ function _applyProvider(name, save) {
   document.querySelectorAll('.provider-selector-item').forEach(el => {
     el.classList.toggle('active', el.dataset.p === name);
   });
+
+  // Update Claude admin nav visibility based on whether admin key is configured
+  if (name === 'claude') {
+    api('/api/settings').then(s => {
+      _updateClaudeAdminNavState(!!(s && (s.anthropic_admin_key || '').trim()));
+    }).catch(() => { _updateClaudeAdminNavState(false); });
+  }
 }
 
 function switchProvider(name) {
@@ -7641,14 +7696,11 @@ async function saveAnthropicKeys() {
     const payload = {};
     if (apiKey) payload.anthropic_api_key = apiKey;
     if (adminKey) payload.anthropic_admin_key = adminKey;
-    const resp = await api('/api/settings/save', {method: 'POST', body: JSON.stringify(payload)});
-    if (resp && (resp.ok || resp.saved)) {
-      if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = 'var(--accent)'; }
-      _claudeKeysDirty = false;
-      setTimeout(() => { if (statusEl) { statusEl.textContent = ''; statusEl.style.color = ''; } }, 3000);
-    } else {
-      if (statusEl) { statusEl.textContent = 'Save failed: ' + (resp.error || 'error'); statusEl.style.color = 'var(--accent)'; }
-    }
+    await api('/api/settings', {method: 'POST', body: JSON.stringify(payload)});
+    if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = 'var(--accent)'; }
+    _claudeKeysDirty = false;
+    _updateClaudeAdminNavState(!!adminKey);
+    setTimeout(() => { if (statusEl) { statusEl.textContent = ''; statusEl.style.color = ''; } }, 3000);
   } catch(e) {
     if (statusEl) { statusEl.textContent = 'Error: ' + e.message; statusEl.style.color = 'var(--accent)'; }
   }

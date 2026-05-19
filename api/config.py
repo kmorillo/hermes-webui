@@ -4150,6 +4150,8 @@ _SETTINGS_DEFAULTS = {
     "auto_title_refresh_every": "0",  # adaptive title refresh: 0=off, 5/10/20=every N exchanges
     "busy_input_mode": "queue",  # behavior when sending while agent is running: queue | interrupt | steer
     "password_hash": None,  # PBKDF2-HMAC-SHA256 hash; None = auth disabled
+    "anthropic_api_key": "",  # Anthropic standard key (sk-ant-api…)
+    "anthropic_admin_key": "",  # Anthropic admin key (sk-ant-admin…)
 }
 _SETTINGS_LEGACY_DROP_KEYS = {"assistant_language", "bubble_layout", "default_model"}
 _SETTINGS_THEME_VALUES = {"light", "dark", "system"}
