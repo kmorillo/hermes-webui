@@ -7531,44 +7531,93 @@ async function loadClaudeAdmin(refresh) {
   const sideEl = document.getElementById('claudeAdminSidebar');
   if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">Loading…</div>';
   if (sideEl) sideEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div>';
+  const fmtNum = n => n >= 1e6 ? (n/1e6).toFixed(2)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
+  const fmtErr = msg => {
+    if (String(msg).includes('no_admin_key') || String(msg).includes('admin_key_required'))
+      return 'An admin API key (sk-ant-admin…) is required. Add it in Settings → Providers.';
+    return msg;
+  };
   try {
-    const resp = await api('/api/claude/usage');
-    if (!resp.ok) {
-      let msg = resp.error || 'Error';
-      if (String(msg).includes('no_admin_key') || String(msg).includes('admin_key_required')) {
-        msg = 'An admin API key (sk-ant-admin…) is required. Set ANTHROPIC_ADMIN_KEY or add it in Settings → Providers.';
-      }
-      if (bodyEl) bodyEl.innerHTML = `<div class="claude-key-banner">${esc(msg)}</div>`;
+    const [usageResp, orgResp, usersResp, ccResp] = await Promise.all([
+      api('/api/claude/usage?granularity=day'),
+      api('/api/claude/admin/org').catch(() => ({ok:false,data:{},error:''})),
+      api('/api/claude/admin/users').catch(() => ({ok:false,data:[],error:''})),
+      api('/api/claude/usage/claude_code').catch(() => ({ok:false,data:[],error:''})),
+    ]);
+    if (!usageResp.ok) {
+      if (bodyEl) bodyEl.innerHTML = `<div class="claude-key-banner">${esc(fmtErr(usageResp.error || 'Error'))}</div>`;
       if (sideEl) sideEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Admin key required.</div>';
       return;
     }
-    const usageData = resp.data || {};
+    const usageData = usageResp.data || {};
     const usage = Array.isArray(usageData) ? usageData : (usageData.data || []);
-    if (!usage.length) {
-      if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">No usage data found.</div>';
-      if (sideEl) sideEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">No data.</div>';
-      return;
-    }
     let totalIn = 0, totalOut = 0;
     usage.forEach(u => { totalIn += (u.input_tokens || 0); totalOut += (u.output_tokens || 0); });
-    const fmtNum = n => n >= 1e6 ? (n/1e6).toFixed(2)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
+
+    // Org info
+    const org = orgResp.ok ? (orgResp.data || {}) : {};
+    const orgHtml = orgResp.ok ? `
+      <div class="claude-section-head">Organization</div>
+      <div class="claude-admin-grid">
+        ${org.name ? `<div class="claude-admin-stat"><div class="claude-admin-stat-label">Name</div><div class="claude-admin-stat-value">${esc(org.name)}</div></div>` : ''}
+        ${org.plan ? `<div class="claude-admin-stat"><div class="claude-admin-stat-label">Plan</div><div class="claude-admin-stat-value">${esc(String(org.plan))}</div></div>` : ''}
+        ${org.id ? `<div class="claude-admin-stat"><div class="claude-admin-stat-label">Org ID</div><div class="claude-admin-stat-value" style="font-size:11px">${esc(org.id)}</div></div>` : ''}
+      </div>` : '';
+
+    // Users table
+    const users = usersResp.ok ? (Array.isArray(usersResp.data) ? usersResp.data : (usersResp.data?.data || [])) : [];
+    const usersHtml = users.length ? `
+      <div class="claude-section-head" style="margin-top:16px">Users (${users.length})</div>
+      <table class="claude-admin-table">
+        <thead><tr><th>Name / Email</th><th>Role</th><th>Added</th></tr></thead>
+        <tbody>${users.slice(0,50).map(u => `<tr>
+          <td>${esc(u.name || u.email || u.id || '—')}</td>
+          <td>${esc(u.role || '—')}</td>
+          <td>${u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}</td>
+        </tr>`).join('')}</tbody>
+      </table>` : '';
+
+    // Claude Code analytics
+    const cc = ccResp.ok ? (Array.isArray(ccResp.data) ? ccResp.data : (ccResp.data?.data || [])) : [];
+    const ccHtml = cc.length ? `
+      <div class="claude-section-head" style="margin-top:16px">Claude Code Analytics</div>
+      <table class="claude-admin-table">
+        <thead><tr><th>Period</th><th>In</th><th>Out</th><th>Cost</th></tr></thead>
+        <tbody>${cc.slice(0,30).map(r => `<tr>
+          <td>${r.period_start ? new Date(r.period_start).toLocaleDateString() : '—'}</td>
+          <td>${fmtNum(r.input_tokens || 0)}</td>
+          <td>${fmtNum(r.output_tokens || 0)}</td>
+          <td>${r.total_cost != null ? '$'+Number(r.total_cost).toFixed(4) : '—'}</td>
+        </tr>`).join('')}</tbody>
+      </table>` : '';
+
+    // Usage by period
+    const usageHtml = usage.length ? `
+      <div class="claude-section-head" style="margin-top:16px">Usage by Day</div>
+      <table class="claude-admin-table">
+        <thead><tr><th>Date</th><th>In</th><th>Out</th></tr></thead>
+        <tbody>${usage.slice(0,30).map(u => `<tr>
+          <td>${u.period_start ? new Date(u.period_start).toLocaleDateString() : '—'}</td>
+          <td>${fmtNum(u.input_tokens || 0)}</td>
+          <td>${fmtNum(u.output_tokens || 0)}</td>
+        </tr>`).join('')}</tbody>
+      </table>` : '<div class="claude-empty">No usage data found.</div>';
+
     if (bodyEl) bodyEl.innerHTML = `
       <div class="claude-section-head">Summary</div>
       <div class="claude-admin-grid">
         <div class="claude-admin-stat"><div class="claude-admin-stat-label">Total input tokens</div><div class="claude-admin-stat-value">${fmtNum(totalIn)}</div></div>
         <div class="claude-admin-stat"><div class="claude-admin-stat-label">Total output tokens</div><div class="claude-admin-stat-value">${fmtNum(totalOut)}</div></div>
         <div class="claude-admin-stat"><div class="claude-admin-stat-label">Usage records</div><div class="claude-admin-stat-value">${usage.length}</div></div>
+        ${users.length ? `<div class="claude-admin-stat"><div class="claude-admin-stat-label">Team members</div><div class="claude-admin-stat-value">${users.length}</div></div>` : ''}
       </div>
-      <div class="claude-section-head" style="margin-top:16px">Recent Usage</div>
-      ${usage.slice(0, 20).map(u => `<div class="claude-card">
-        <div class="claude-card-title">${esc(u.model || u.organization_name || 'Record')}</div>
-        <div class="claude-card-meta">
-          ${u.input_tokens ? `<span>In: ${fmtNum(u.input_tokens)}</span>` : ''}
-          ${u.output_tokens ? `<span>Out: ${fmtNum(u.output_tokens)}</span>` : ''}
-          ${u.period_start ? `<span>${new Date(u.period_start).toLocaleDateString()}</span>` : ''}
-        </div>
-      </div>`).join('')}`;
-    if (sideEl) sideEl.innerHTML = `<div style="padding:8px 12px;font-size:12px"><div style="color:var(--muted);font-size:11px">In tokens</div><div style="font-weight:600">${fmtNum(totalIn)}</div><div style="color:var(--muted);font-size:11px;margin-top:8px">Out tokens</div><div style="font-weight:600">${fmtNum(totalOut)}</div></div>`;
+      ${orgHtml}${usersHtml}${ccHtml}${usageHtml}`;
+    if (sideEl) sideEl.innerHTML = `<div style="padding:8px 12px;font-size:12px">
+      ${org.name ? `<div style="font-weight:600;margin-bottom:8px">${esc(org.name)}</div>` : ''}
+      <div style="color:var(--muted);font-size:11px">In tokens</div><div style="font-weight:600">${fmtNum(totalIn)}</div>
+      <div style="color:var(--muted);font-size:11px;margin-top:8px">Out tokens</div><div style="font-weight:600">${fmtNum(totalOut)}</div>
+      ${users.length ? `<div style="color:var(--muted);font-size:11px;margin-top:8px">Team</div><div style="font-weight:600">${users.length} members</div>` : ''}
+    </div>`;
   } catch(e) {
     if (bodyEl) bodyEl.innerHTML = `<div class="claude-empty" style="color:var(--accent)">${esc(e.message)}</div>`;
   }

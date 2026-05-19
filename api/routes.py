@@ -4458,6 +4458,25 @@ def handle_post(handler, parsed) -> bool:
     if parsed.path == "/api/transcribe":
         return handle_transcribe(handler)
 
+    # Claude file upload — must be handled before read_body consumes the stream
+    if parsed.path == "/api/claude/files":
+        ct = handler.headers.get("Content-Type", "")
+        if "multipart" in ct:
+            from api.config import load_settings as _claude_load_settings_fu
+            from api.providers.anthropic_adapter import upload_file as _claude_upload_file
+            from api.upload import parse_multipart as _parse_multipart
+            cl = int(handler.headers.get("Content-Length", 0))
+            fields, files = _parse_multipart(handler.rfile, ct, cl)
+            file_entry = files.get("file")
+            if not file_entry:
+                return bad(handler, "missing file part")
+            fname, fdata = file_entry
+            import mimetypes as _mt
+            fmime = _mt.guess_type(fname)[0] or "application/octet-stream"
+            _cl_fu_settings = _claude_load_settings_fu()
+            return j(handler, _claude_upload_file(fname, fdata, fmime, _cl_fu_settings))
+        return bad(handler, "expected multipart/form-data")
+
     if diag:
         diag.stage("read_body")
     try:
@@ -5930,27 +5949,24 @@ def handle_post(handler, parsed) -> bool:
         from api.config import load_settings as _claude_load_settings_p
         from api.providers.anthropic_adapter import (
             cancel_batch, count_tokens, create_batch, send_message,
-            stream_message, upload_file,
+            stream_message,
         )
-        from api.upload import parse_multipart
         _cl_settings = _claude_load_settings_p()
         _cl_path = parsed.path[len("/api/claude"):]
 
         # Non-streaming messages (used by batch-style callers)
         if _cl_path == "/messages":
-            payload = json.loads(body) if body else {}
-            return j(handler, send_message(payload, _cl_settings))
+            return j(handler, send_message(body, _cl_settings))
 
         # Token counting
         if _cl_path == "/count_tokens":
-            payload = json.loads(body) if body else {}
-            return j(handler, count_tokens(_cl_settings, **payload))
+            return j(handler, count_tokens(_cl_settings, **body))
 
         # SSE streaming chat
         if _cl_path == "/chat":
             import queue as _queue
             from api.providers.anthropic_adapter import _get_key as _cl_get_key
-            payload = json.loads(body) if body else {}
+            payload = body
             cl_key = _cl_get_key(_cl_settings)
             if not cl_key:
                 return j(handler, {"ok": False, "error": "no_key"}, status=401)
@@ -5996,25 +6012,11 @@ def handle_post(handler, parsed) -> bool:
             return True
 
         if _cl_path == "/batches":
-            payload = json.loads(body) if body else {}
-            return j(handler, create_batch(payload, _cl_settings))
+            return j(handler, create_batch(body, _cl_settings))
 
         if _cl_path.startswith("/batches/") and _cl_path.endswith("/cancel"):
             batch_id = _cl_path[len("/batches/"):-len("/cancel")]
             return j(handler, cancel_batch(batch_id, _cl_settings))
-
-        # File upload: POST /api/claude/files with multipart/form-data
-        if _cl_path == "/files":
-            ct = handler.headers.get("Content-Type", "")
-            if "multipart" in ct:
-                parts = parse_multipart(body, ct)
-                file_part = parts.get("file") if parts else None
-                if not file_part:
-                    return bad(handler, "missing file part")
-                fname = file_part.get("filename", "upload.bin")
-                fdata = file_part.get("data", b"")
-                fmime = file_part.get("content_type", "application/octet-stream")
-                return j(handler, upload_file(fname, fdata, fmime, _cl_settings))
 
         return j(handler, {"error": "not_found"}, status=404)
 
