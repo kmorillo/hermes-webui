@@ -2105,6 +2105,7 @@ def set_agent_dir(path: str) -> dict[str, Any]:
     # Re-run discovery and patch the module globals
     new_agent_dir = _cfg._discover_agent_dir()
     _cfg._AGENT_DIR = new_agent_dir
+    _cfg._HERMES_FOUND = bool(new_agent_dir)
     _cfg._AGENT_DIR_CANDIDATE = str(candidate)
 
     # Also update sys.path so Hermes modules become importable
