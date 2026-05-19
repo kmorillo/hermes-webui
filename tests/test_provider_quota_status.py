@@ -1455,3 +1455,240 @@ def test_account_usage_semaphore_caps_concurrency(monkeypatch, tmp_path):
         assert len(results) == 2, f'expected 2 results, got {len(results)}'
     finally:
         _restore_config(old_cfg, old_mtime)
+
+
+def test_cursor_is_in_account_usage_providers():
+    """cursor must be listed as an account-usage provider."""
+    import api.providers as providers
+
+    assert "cursor" in providers._ACCOUNT_USAGE_PROVIDERS
+
+
+def test_cursor_account_usage_subprocess_fetches_usage_endpoint(monkeypatch, capsys):
+    """Cursor quota probe should call the /usage endpoint and parse the response."""
+    import api.providers as providers
+
+    seen = []
+
+    agent_mod = types.ModuleType("agent")
+    agent_mod.__path__ = []
+    account_usage_mod = types.ModuleType("agent.account_usage")
+
+    def fake_fetch_account_usage(provider, *, base_url=None, api_key=None):
+        return None
+
+    def fake_urlopen(req, timeout):
+        seen.append({
+            "url": req.full_url,
+            "timeout": timeout,
+            "authorization": dict(req.header_items()).get("Authorization"),
+        })
+        payload = {
+            "numRequestsFast": 150,
+            "maxRequestUsage": 500,
+            "numRequestsSlowForced": 10,
+            "startOfMonth": "2030-03-01T00:00:00.000Z",
+            "plan": "pro",
+        }
+        return _FakeResponse(json.dumps(payload).encode("utf-8"))
+
+    account_usage_mod.fetch_account_usage = fake_fetch_account_usage
+    monkeypatch.setitem(sys.modules, "agent", agent_mod)
+    monkeypatch.setitem(sys.modules, "agent.account_usage", account_usage_mod)
+    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(sys, "argv", ["quota-probe", "cursor", "test-cursor-key"])
+
+    exec(providers._ACCOUNT_USAGE_SUBPROCESS_CODE, {"__name__": "__main__"})
+
+    output = capsys.readouterr().out.strip()
+    snapshot = json.loads(output)
+
+    assert len(seen) == 1
+    assert seen[0]["url"] == "https://api.cursor.sh/usage"
+    assert seen[0]["timeout"] == 4.0
+    assert seen[0]["authorization"] == "Bearer test-cursor-key"
+
+    assert snapshot["provider"] == "cursor"
+    assert snapshot["source"] == "usage_api"
+    assert snapshot["title"] == "Account usage"
+    assert snapshot["plan"] == "Pro"
+    assert snapshot["available"] is True
+    assert len(snapshot["windows"]) == 1
+    assert snapshot["windows"][0]["label"] == "Monthly"
+    assert abs(snapshot["windows"][0]["used_percent"] - 30.0) < 0.01
+    assert snapshot["windows"][0]["reset_at"] == "2030-04-01T00:00:00Z"
+    assert snapshot["windows"][0]["detail"] == "150 / 500 fast requests used"
+    assert "10 requests rerouted to slow models" in snapshot["details"]
+
+
+def test_cursor_account_usage_subprocess_no_key_returns_null(monkeypatch, capsys):
+    """Cursor quota probe with no API key should output null."""
+    import api.providers as providers
+
+    agent_mod = types.ModuleType("agent")
+    agent_mod.__path__ = []
+    account_usage_mod = types.ModuleType("agent.account_usage")
+
+    def fake_fetch_account_usage(provider, *, base_url=None, api_key=None):
+        return None
+
+    account_usage_mod.fetch_account_usage = fake_fetch_account_usage
+    monkeypatch.setitem(sys.modules, "agent", agent_mod)
+    monkeypatch.setitem(sys.modules, "agent.account_usage", account_usage_mod)
+    monkeypatch.setattr(sys, "argv", ["quota-probe", "cursor", ""])
+
+    exec(providers._ACCOUNT_USAGE_SUBPROCESS_CODE, {"__name__": "__main__"})
+
+    output = capsys.readouterr().out.strip()
+    assert json.loads(output) is None
+
+
+def test_cursor_account_usage_subprocess_network_failure_returns_null(monkeypatch, capsys):
+    """Cursor quota probe should return null when the network call fails."""
+    import api.providers as providers
+
+    agent_mod = types.ModuleType("agent")
+    agent_mod.__path__ = []
+    account_usage_mod = types.ModuleType("agent.account_usage")
+
+    def fake_fetch_account_usage(provider, *, base_url=None, api_key=None):
+        return None
+
+    def fake_urlopen(req, timeout):
+        import urllib.error
+        raise urllib.error.URLError("connection refused")
+
+    account_usage_mod.fetch_account_usage = fake_fetch_account_usage
+    monkeypatch.setitem(sys.modules, "agent", agent_mod)
+    monkeypatch.setitem(sys.modules, "agent.account_usage", account_usage_mod)
+    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(sys, "argv", ["quota-probe", "cursor", "test-cursor-key"])
+
+    exec(providers._ACCOUNT_USAGE_SUBPROCESS_CODE, {"__name__": "__main__"})
+
+    output = capsys.readouterr().out.strip()
+    assert json.loads(output) is None
+
+
+def test_cursor_account_usage_subprocess_no_limit_shows_raw_count(monkeypatch, capsys):
+    """When maxRequestUsage is absent, the probe shows raw fast-request count."""
+    import api.providers as providers
+
+    agent_mod = types.ModuleType("agent")
+    agent_mod.__path__ = []
+    account_usage_mod = types.ModuleType("agent.account_usage")
+
+    def fake_fetch_account_usage(provider, *, base_url=None, api_key=None):
+        return None
+
+    def fake_urlopen(req, timeout):
+        payload = {
+            "numRequestsFast": 42,
+            "startOfMonth": "2030-05-01T00:00:00.000Z",
+        }
+        return _FakeResponse(json.dumps(payload).encode("utf-8"))
+
+    account_usage_mod.fetch_account_usage = fake_fetch_account_usage
+    monkeypatch.setitem(sys.modules, "agent", agent_mod)
+    monkeypatch.setitem(sys.modules, "agent.account_usage", account_usage_mod)
+    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(sys, "argv", ["quota-probe", "cursor", "test-cursor-key"])
+
+    exec(providers._ACCOUNT_USAGE_SUBPROCESS_CODE, {"__name__": "__main__"})
+
+    output = capsys.readouterr().out.strip()
+    snapshot = json.loads(output)
+
+    assert snapshot["provider"] == "cursor"
+    assert snapshot["available"] is True
+    assert snapshot["windows"][0]["used_percent"] is None
+    assert snapshot["windows"][0]["detail"] == "42 fast requests used this month"
+    assert snapshot["windows"][0]["reset_at"] == "2030-06-01T00:00:00Z"
+
+
+def test_cursor_account_usage_agent_snapshot_takes_priority(monkeypatch, capsys):
+    """If the agent module returns a Cursor snapshot, the custom fetcher is not called."""
+    import api.providers as providers
+
+    agent_mod = types.ModuleType("agent")
+    agent_mod.__path__ = []
+    account_usage_mod = types.ModuleType("agent.account_usage")
+    urlopen_calls = []
+
+    def fake_fetch_account_usage(provider, *, base_url=None, api_key=None):
+        return SimpleNamespace(
+            provider="cursor",
+            source="agent_usage_api",
+            title="Account usage",
+            plan="Business",
+            windows=(),
+            details=("Agent-supplied detail",),
+            available=True,
+            unavailable_reason=None,
+            fetched_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+        )
+
+    def fake_urlopen(req, timeout):
+        urlopen_calls.append(req.full_url)
+        return _FakeResponse(b"{}")
+
+    account_usage_mod.fetch_account_usage = fake_fetch_account_usage
+    monkeypatch.setitem(sys.modules, "agent", agent_mod)
+    monkeypatch.setitem(sys.modules, "agent.account_usage", account_usage_mod)
+    monkeypatch.setattr(providers.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(sys, "argv", ["quota-probe", "cursor", "test-cursor-key"])
+
+    exec(providers._ACCOUNT_USAGE_SUBPROCESS_CODE, {"__name__": "__main__"})
+
+    output = capsys.readouterr().out.strip()
+    snapshot = json.loads(output)
+
+    assert urlopen_calls == [], "Custom cursor fetcher should not be called when agent succeeds"
+    assert snapshot["source"] == "agent_usage_api"
+    assert snapshot["plan"] == "Business"
+
+
+def test_cursor_account_usage_is_fetched_under_active_profile(monkeypatch, tmp_path):
+    """get_provider_quota('cursor') should route through account-usage path."""
+    import api.providers as providers
+
+    monkeypatch.setattr(profiles, "get_active_hermes_home", lambda: tmp_path)
+    old_cfg, old_mtime = _with_config(model={"provider": "cursor"})
+    providers._account_usage_status_cache.clear()
+
+    cursor_snapshot = SimpleNamespace(
+        provider="cursor",
+        source="usage_api",
+        title="Account usage",
+        plan="Pro",
+        windows=(
+            SimpleNamespace(
+                label="Monthly",
+                used_percent=30.0,
+                reset_at="2030-04-01T00:00:00Z",
+                detail="150 / 500 fast requests used",
+            ),
+        ),
+        details=(),
+        available=True,
+        unavailable_reason=None,
+        fetched_at=datetime(2030, 3, 17, 12, 0, tzinfo=timezone.utc),
+        pool=None,
+    )
+
+    def fake_fetch(provider, home, api_key=None):
+        return cursor_snapshot
+
+    monkeypatch.setattr(providers, "_agent_fetch_account_usage_for_home", fake_fetch)
+    try:
+        result = providers.get_provider_quota("cursor")
+    finally:
+        providers._account_usage_status_cache.clear()
+        _restore_config(old_cfg, old_mtime)
+
+    assert result["ok"] is True
+    assert result["provider"] == "cursor"
+    assert result["supported"] is True
+    assert result["status"] == "available"
+    assert result["account_limits"]["plan"] == "Pro"
+    assert result["account_limits"]["available"] is True

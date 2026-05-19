@@ -64,7 +64,7 @@ _PROVIDER_QUOTA_TIMEOUT_SECONDS = 3.0
 _ACCOUNT_USAGE_SUBPROCESS_TIMEOUT_SECONDS = 35.0
 _ACCOUNT_USAGE_CACHE_TTL_SECONDS = 45.0
 _ACCOUNT_USAGE_CACHE_MAX_ENTRIES = 64
-_ACCOUNT_USAGE_PROVIDERS = frozenset({"openai-codex", "anthropic"})
+_ACCOUNT_USAGE_PROVIDERS = frozenset({"openai-codex", "anthropic", "cursor"})
 
 # Upper bound on simultaneous profile-isolated quota probe subprocesses.
 # Each probe runs a Python child for up to 35 s; capping concurrency prevents
@@ -616,6 +616,90 @@ def _fetch_codex_account_usage_from_pool():
         return None
 
 
+_CURSOR_USAGE_URL = "https://api.cursor.sh/usage"
+_CURSOR_USAGE_TIMEOUT_SECONDS = 4.0
+
+
+def _cursor_next_month_start(dt):
+    if dt is None:
+        return None
+    year, month = dt.year, dt.month
+    if month == 12:
+        year, month = year + 1, 1
+    else:
+        month += 1
+    try:
+        return dt.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0)
+    except Exception:
+        return None
+
+
+def _fetch_cursor_usage_payload(api_key):
+    request = urllib_request.Request(
+        _CURSOR_USAGE_URL,
+        headers={
+            "Authorization": "Bearer " + api_key,
+            "Accept": "application/json",
+            "User-Agent": "cursor-ide/0.0.0 (Hermes WebUI)",
+        },
+    )
+    with urllib_request.urlopen(request, timeout=_CURSOR_USAGE_TIMEOUT_SECONDS) as response:
+        return json.loads(response.read().decode("utf-8") or "{}")
+
+
+def _cursor_snapshot_from_usage_payload(payload):
+    if not isinstance(payload, dict):
+        payload = {}
+    num_fast = _number(payload.get("numRequestsFast"))
+    max_requests = _number(payload.get("maxRequestUsage"))
+    start_of_month = _parse_dt(payload.get("startOfMonth"))
+    reset_at = _cursor_next_month_start(start_of_month)
+
+    windows = []
+    if num_fast is not None and max_requests:
+        used_pct = min(100.0, float(num_fast) / float(max_requests) * 100.0)
+        windows.append(SimpleNamespace(
+            label="Monthly",
+            used_percent=used_pct,
+            reset_at=reset_at,
+            detail=str(int(num_fast)) + " / " + str(int(max_requests)) + " fast requests used",
+        ))
+    elif num_fast is not None:
+        windows.append(SimpleNamespace(
+            label="Monthly",
+            used_percent=None,
+            reset_at=reset_at,
+            detail=str(int(num_fast)) + " fast requests used this month",
+        ))
+
+    details = []
+    num_slow = _number(payload.get("numRequestsSlowForced"))
+    if num_slow is not None and num_slow > 0:
+        details.append(str(int(num_slow)) + " requests rerouted to slow models")
+
+    return SimpleNamespace(
+        provider="cursor",
+        source="usage_api",
+        title="Account usage",
+        plan=_title_case_slug(payload.get("plan")),
+        windows=tuple(windows),
+        details=tuple(details),
+        available=bool(windows or details),
+        unavailable_reason=None if (windows or details) else "Cursor usage data is unavailable for this key.",
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+
+def _fetch_cursor_account_usage(api_key):
+    if not api_key:
+        return None
+    try:
+        payload = _fetch_cursor_usage_payload(api_key)
+        return _cursor_snapshot_from_usage_payload(payload)
+    except Exception:
+        return None
+
+
 provider = sys.argv[1]
 api_key = sys.argv[2] or None
 try:
@@ -626,6 +710,8 @@ if str(provider or "").strip().lower() == "openai-codex":
     pool_snapshot = _fetch_codex_account_usage_from_pool()
     if isinstance(getattr(pool_snapshot, "pool", None), dict):
         snapshot = pool_snapshot
+if str(provider or "").strip().lower() == "cursor" and snapshot is None:
+    snapshot = _fetch_cursor_account_usage(api_key)
 print(json.dumps(_snapshot_payload(snapshot)))
 """
 
