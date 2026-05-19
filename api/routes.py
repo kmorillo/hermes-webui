@@ -4362,19 +4362,23 @@ def handle_get(handler, parsed) -> bool:
 
     # ── Claude / Anthropic proxy routes (GET) ─────────────────────────────────
     if parsed.path.startswith("/api/claude/"):
-        from api.config import load_settings
+        from api.config import load_settings as _claude_load_settings
         from api.providers.anthropic_adapter import (
-            cancel_batch, create_message, get_batch, get_batch_results,
-            get_file_metadata, get_usage, list_batches, list_files, list_models,
+            get_batch, get_batch_results, get_claude_code_analytics,
+            get_file_metadata, get_organization, get_usage, list_batches,
+            list_files, list_models, list_users,
         )
-        _cl_settings = load_settings()
+        _cl_settings = _claude_load_settings()
         _cl_path = parsed.path[len("/api/claude"):]
+        _cl_qs = parse_qs(parsed.query)
 
         if _cl_path == "/models":
             return j(handler, list_models(_cl_settings))
 
         if _cl_path == "/batches":
-            return j(handler, list_batches(_cl_settings))
+            before_id = _cl_qs.get("before_id", [""])[0] or None
+            limit = int(_cl_qs.get("limit", ["20"])[0])
+            return j(handler, list_batches(_cl_settings, before_id=before_id, limit=limit))
 
         if _cl_path.startswith("/batches/") and _cl_path.endswith("/results"):
             batch_id = _cl_path[len("/batches/"):-len("/results")]
@@ -4392,7 +4396,28 @@ def handle_get(handler, parsed) -> bool:
             return j(handler, get_file_metadata(file_id, _cl_settings))
 
         if _cl_path == "/usage":
-            return j(handler, get_usage(_cl_settings))
+            return j(handler, get_usage(
+                _cl_settings,
+                start_time=_cl_qs.get("start_time", [""])[0] or None,
+                end_time=_cl_qs.get("end_time", [""])[0] or None,
+                granularity=_cl_qs.get("granularity", ["day"])[0],
+                group_by=_cl_qs.get("group_by", [""])[0] or None,
+            ))
+
+        if _cl_path == "/usage/claude_code":
+            return j(handler, get_claude_code_analytics(
+                _cl_settings,
+                start_time=_cl_qs.get("start_time", [""])[0] or None,
+                end_time=_cl_qs.get("end_time", [""])[0] or None,
+            ))
+
+        if _cl_path == "/admin/users":
+            limit = int(_cl_qs.get("limit", ["100"])[0])
+            after_id = _cl_qs.get("after_id", [""])[0] or None
+            return j(handler, list_users(_cl_settings, limit=limit, after_id=after_id))
+
+        if _cl_path == "/admin/org":
+            return j(handler, get_organization(_cl_settings))
 
         return j(handler, {"error": "not_found"}, status=404)
 
@@ -5902,17 +5927,73 @@ def handle_post(handler, parsed) -> bool:
 
     # ── Claude / Anthropic proxy routes (POST) ────────────────────────────────
     if parsed.path.startswith("/api/claude/"):
-        from api.config import load_settings
+        from api.config import load_settings as _claude_load_settings_p
         from api.providers.anthropic_adapter import (
-            cancel_batch, create_batch, create_message, upload_file,
+            cancel_batch, count_tokens, create_batch, send_message,
+            stream_message, upload_file,
         )
         from api.upload import parse_multipart
-        _cl_settings = load_settings()
+        _cl_settings = _claude_load_settings_p()
         _cl_path = parsed.path[len("/api/claude"):]
 
+        # Non-streaming messages (used by batch-style callers)
         if _cl_path == "/messages":
             payload = json.loads(body) if body else {}
-            return j(handler, create_message(payload, _cl_settings))
+            return j(handler, send_message(payload, _cl_settings))
+
+        # Token counting
+        if _cl_path == "/count_tokens":
+            payload = json.loads(body) if body else {}
+            return j(handler, count_tokens(_cl_settings, **payload))
+
+        # SSE streaming chat
+        if _cl_path == "/chat":
+            import queue as _queue
+            from api.providers.anthropic_adapter import _get_key as _cl_get_key
+            payload = json.loads(body) if body else {}
+            cl_key = _cl_get_key(_cl_settings)
+            if not cl_key:
+                return j(handler, {"ok": False, "error": "no_key"}, status=401)
+            out_q: _queue.Queue = _queue.Queue()
+            t = threading.Thread(
+                target=stream_message,
+                kwargs={
+                    "api_key": cl_key,
+                    "model": payload.get("model", "claude-sonnet-4-5"),
+                    "messages": payload.get("messages", []),
+                    "out_queue": out_q,
+                    "system": payload.get("system"),
+                    "max_tokens": int(payload.get("max_tokens", 4096)),
+                    "temperature": float(payload.get("temperature", 1.0)),
+                },
+                daemon=True,
+            )
+            t.start()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            handler.send_header("Cache-Control", "no-cache")
+            handler.send_header("X-Accel-Buffering", "no")
+            handler.send_header("Connection", "keep-alive")
+            handler.end_headers()
+            try:
+                while True:
+                    try:
+                        ev = out_q.get(timeout=_SSE_HEARTBEAT_INTERVAL_SECONDS)
+                    except queue.Empty:
+                        handler.wfile.write(b": keepalive\n\n")
+                        handler.wfile.flush()
+                        continue
+                    ev_name = ev.get("event", "")
+                    ev_data = json.dumps(ev.get("data", {}))
+                    handler.wfile.write(
+                        f"event: {ev_name}\ndata: {ev_data}\n\n".encode("utf-8")
+                    )
+                    handler.wfile.flush()
+                    if ev_name in ("claude_done", "claude_error"):
+                        break
+            except _CLIENT_DISCONNECT_ERRORS:
+                pass
+            return True
 
         if _cl_path == "/batches":
             payload = json.loads(body) if body else {}
@@ -5922,16 +6003,18 @@ def handle_post(handler, parsed) -> bool:
             batch_id = _cl_path[len("/batches/"):-len("/cancel")]
             return j(handler, cancel_batch(batch_id, _cl_settings))
 
-        if _cl_path == "/files/upload":
+        # File upload: POST /api/claude/files with multipart/form-data
+        if _cl_path == "/files":
             ct = handler.headers.get("Content-Type", "")
-            parts = parse_multipart(body, ct)
-            file_part = parts.get("file") if parts else None
-            if not file_part:
-                return bad(handler, "missing file part")
-            fname = file_part.get("filename", "upload.bin")
-            fdata = file_part.get("data", b"")
-            fmime = file_part.get("content_type", "application/octet-stream")
-            return j(handler, upload_file(fname, fdata, fmime, _cl_settings))
+            if "multipart" in ct:
+                parts = parse_multipart(body, ct)
+                file_part = parts.get("file") if parts else None
+                if not file_part:
+                    return bad(handler, "missing file part")
+                fname = file_part.get("filename", "upload.bin")
+                fdata = file_part.get("data", b"")
+                fmime = file_part.get("content_type", "application/octet-stream")
+                return j(handler, upload_file(fname, fdata, fmime, _cl_settings))
 
         return j(handler, {"error": "not_found"}, status=404)
 
@@ -5968,9 +6051,9 @@ def handle_delete(handler, parsed) -> bool:
 
     # ── Claude / Anthropic proxy routes (DELETE) ──────────────────────────────
     if parsed.path.startswith("/api/claude/"):
-        from api.config import load_settings
+        from api.config import load_settings as _claude_load_settings_d
         from api.providers.anthropic_adapter import delete_file
-        _cl_settings = load_settings()
+        _cl_settings = _claude_load_settings_d()
         _cl_path = parsed.path[len("/api/claude"):]
 
         if _cl_path.startswith("/files/"):

@@ -7152,14 +7152,41 @@ document.addEventListener('click', function(e) {
 
 // ── Claude panel state ────────────────────────────────────────────────────────
 
-let _claudeConversation = [];  // [{role, content}]
+let _claudeConversation = [];
 let _claudeSending = false;
+let _claudeModels = [];
+
+function _claudeErrMsg(resp) {
+  if (!resp) return 'Unknown error';
+  if (!resp.ok && resp.error) return String(resp.error);
+  return 'Unknown error';
+}
 
 function loadClaudeChat() {
   const list = document.getElementById('claudeChatList');
   if (list && _claudeConversation.length === 0) {
     list.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Start a new conversation →</div>';
   }
+  _loadClaudeModels();
+}
+
+async function _loadClaudeModels() {
+  const sel = document.getElementById('claudeChatModel');
+  if (!sel) return;
+  try {
+    const resp = await api('/api/claude/models');
+    if (resp && resp.ok && resp.data) {
+      const models = Array.isArray(resp.data) ? resp.data : (resp.data.data || []);
+      if (models.length) {
+        _claudeModels = models;
+        const currentVal = sel.value;
+        sel.innerHTML = models.map(m => {
+          const id = m.id || m;
+          return `<option value="${esc(id)}"${id === currentVal ? ' selected' : ''}>${esc(id)}</option>`;
+        }).join('');
+      }
+    }
+  } catch(_) {}
 }
 
 function startNewClaudeChat() {
@@ -7192,34 +7219,81 @@ async function sendClaudeChat() {
   _claudeSending = true;
   input.value = '';
   if (sendBtn) sendBtn.disabled = true;
-  if (statusEl) statusEl.textContent = 'Sending…';
+  if (statusEl) statusEl.textContent = 'Streaming…';
 
   _claudeConversation.push({role: 'user', content: text});
   _renderClaudeChatMessages(msgsEl);
 
+  const model = modelSel ? modelSel.value : 'claude-sonnet-4-5';
+  let assistantText = '';
+  let assistantBubble = null;
+
+  const addAssistantBubble = () => {
+    assistantBubble = document.createElement('div');
+    assistantBubble.className = 'claude-chat-bubble assistant';
+    assistantBubble.textContent = '…';
+    msgsEl.appendChild(assistantBubble);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+  };
+
+  const csrfTok = window.__HERMES_CONFIG__ && window.__HERMES_CONFIG__.csrfToken;
+  const fetchHeaders = {'Content-Type': 'application/json'};
+  if (csrfTok) fetchHeaders['X-Hermes-CSRF-Token'] = csrfTok;
+
   try {
-    const model = modelSel ? modelSel.value : 'claude-sonnet-4-5';
-    const resp = await api('/api/claude/messages', {
+    const resp = await fetch('/api/claude/chat', {
       method: 'POST',
-      body: JSON.stringify({
-        model,
-        max_tokens: 4096,
-        messages: _claudeConversation,
-      }),
+      headers: fetchHeaders,
+      body: JSON.stringify({model, max_tokens: 4096, messages: _claudeConversation}),
     });
-    if (resp && resp.content && resp.content[0]) {
-      const replyText = resp.content.map(b => b.text || '').join('');
-      _claudeConversation.push({role: 'assistant', content: replyText});
-      _renderClaudeChatMessages(msgsEl);
-      if (statusEl) statusEl.textContent = `Stop reason: ${resp.stop_reason || 'end_turn'}`;
-    } else if (resp && resp.error) {
-      const errMsg = typeof resp.error === 'object'
-        ? (resp.error.message || JSON.stringify(resp.error))
-        : String(resp.error);
+
+    if (!resp.ok) {
+      const errData = await resp.json().catch(() => ({}));
+      const errMsg = errData.error || `HTTP ${resp.status}`;
       if (statusEl) statusEl.textContent = 'Error: ' + errMsg;
-      if (errMsg === 'no_key') {
+      if (String(errMsg).includes('no_key')) {
         _renderClaudeNoKey(msgsEl, 'ANTHROPIC_API_KEY');
       }
+      return;
+    }
+
+    addAssistantBubble();
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      let eventType = '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          const dataStr = line.slice(6).trim();
+          if (!dataStr) continue;
+          try {
+            const ev = JSON.parse(dataStr);
+            if (eventType === 'claude_delta' && ev.text) {
+              assistantText += ev.text;
+              if (assistantBubble) assistantBubble.textContent = assistantText;
+              msgsEl.scrollTop = msgsEl.scrollHeight;
+            } else if (eventType === 'claude_done') {
+              if (statusEl) statusEl.textContent = ev.stop_reason ? `Stop: ${ev.stop_reason}` : '';
+            } else if (eventType === 'claude_error') {
+              if (statusEl) statusEl.textContent = 'Error: ' + (ev.message || 'stream error');
+            }
+          } catch(_) {}
+          eventType = '';
+        }
+      }
+    }
+
+    if (assistantText) {
+      _claudeConversation.push({role: 'assistant', content: assistantText});
     }
   } catch(err) {
     if (statusEl) statusEl.textContent = 'Error: ' + err.message;
@@ -7232,122 +7306,193 @@ async function sendClaudeChat() {
 function _renderClaudeChatMessages(container) {
   if (!container) return;
   if (_claudeConversation.length === 0) {
-    container.innerHTML = '<div class="claude-empty"><span>Start a conversation with Claude.</span></div>';
+    container.innerHTML = '<div class="claude-empty"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>Start a conversation with Claude.</span></div>';
     return;
   }
   container.innerHTML = _claudeConversation.map(m => {
     const cls = m.role === 'user' ? 'user' : 'assistant';
-    return `<div class="claude-chat-bubble ${cls}">${esc(typeof m.content === 'string' ? m.content : JSON.stringify(m.content))}</div>`;
+    const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    return `<div class="claude-chat-bubble ${cls}">${esc(content)}</div>`;
   }).join('');
   container.scrollTop = container.scrollHeight;
 }
 
 function _renderClaudeNoKey(container, keyName) {
   if (!container) return;
-  const banner = `<div class="claude-key-banner">
-    <strong>API key not configured.</strong><br>
-    Set <code>${esc(keyName)}</code> as an environment variable and restart the server, or add it in <strong>Settings → Providers</strong>.
-  </div>`;
-  container.innerHTML = banner;
+  container.innerHTML = `<div class="claude-key-banner"><strong>API key not configured.</strong><br>Set <code>${esc(keyName)}</code> as an environment variable and restart, or add it in <strong>Settings → Providers</strong>.</div>`;
 }
 
 // ── Claude Batches ────────────────────────────────────────────────────────────
 
 async function loadClaudeBatches(refresh) {
-  const body = document.getElementById('claudeBatchesBody');
+  const bodyEl = document.getElementById('claudeBatchesBody');
   const list = document.getElementById('claudeBatchesList');
-  if (body) body.innerHTML = '<div class="claude-empty">Loading…</div>';
+  if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">Loading…</div>';
   if (list) list.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div>';
   try {
-    const data = await api('/api/claude/batches');
-    if (data && data.error) {
-      const msg = data.error === 'no_key'
-        ? 'Set ANTHROPIC_API_KEY to use Batches.'
-        : (typeof data.error === 'object' ? (data.error.message || JSON.stringify(data.error)) : String(data.error));
-      if (body) body.innerHTML = `<div class="claude-key-banner">${esc(msg)}</div>`;
+    const resp = await api('/api/claude/batches');
+    if (!resp.ok) {
+      const msg = resp.error === 'no_key' ? 'Set ANTHROPIC_API_KEY to use Batches.' : (resp.error || 'Error');
+      if (bodyEl) bodyEl.innerHTML = `<div class="claude-key-banner">${esc(msg)}</div>`;
       if (list) list.innerHTML = `<div style="padding:12px;color:var(--muted);font-size:12px">${esc(msg)}</div>`;
       return;
     }
-    const batches = (data && data.data) || [];
+    const batchData = resp.data || {};
+    const batches = Array.isArray(batchData) ? batchData : (batchData.data || []);
+    const newBatchForm = `<details style="margin-bottom:12px;background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:0">
+      <summary style="padding:10px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text)">+ New Batch</summary>
+      <div style="padding:12px 14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:8px">
+        <label style="font-size:11px;color:var(--muted)">Model</label>
+        <select id="claudeBatchModelSel" style="padding:5px 8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-size:12px">
+          <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
+          <option value="claude-haiku-3-5">claude-haiku-3-5</option>
+          <option value="claude-opus-4-5">claude-opus-4-5</option>
+        </select>
+        <label style="font-size:11px;color:var(--muted)">Requests JSON array (each: {custom_id, params: {messages, max_tokens}})</label>
+        <textarea id="claudeBatchRequestsTA" rows="5" style="padding:8px;background:var(--code-bg);color:var(--text);border:1px solid var(--border2);border-radius:6px;font-size:11px;font-family:ui-monospace,monospace;resize:vertical" placeholder='[{"custom_id":"req-1","params":{"model":"claude-sonnet-4-5","max_tokens":256,"messages":[{"role":"user","content":"Hello"}]}}]'></textarea>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="sm-btn" onclick="submitClaudeBatch()">Submit batch</button>
+          <span id="claudeBatchSubmitStatus" style="font-size:11px;color:var(--muted)"></span>
+        </div>
+      </div>
+    </details>`;
     if (batches.length === 0) {
-      if (body) body.innerHTML = '<div class="claude-empty">No batches found.</div>';
+      if (bodyEl) bodyEl.innerHTML = newBatchForm + '<div class="claude-empty">No batches yet.</div>';
       if (list) list.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">No batches.</div>';
       return;
     }
     const batchHtml = batches.map(b => {
-      const pct = b.request_counts
-        ? `${b.request_counts.processing || 0} processing / ${b.request_counts.succeeded || 0} ok / ${b.request_counts.errored || 0} err`
-        : '';
-      const statusCls = b.processing_status === 'ended' ? 'ended'
-        : b.processing_status === 'canceling' ? 'canceling' : 'processing';
+      const counts = b.request_counts || {};
+      const countStr = `${counts.processing || 0} processing / ${counts.succeeded || 0} ok / ${counts.errored || 0} err`;
+      const statusCls = b.processing_status === 'ended' ? 'ended' : b.processing_status === 'canceling' ? 'canceling' : 'processing';
+      const ts = b.created_at ? new Date(b.created_at * 1000).toLocaleString() : '';
       return `<div class="claude-card">
-        <div class="claude-card-title">${esc(b.id)}</div>
+        <div class="claude-card-title" style="font-size:12px;font-family:ui-monospace,monospace">${esc(b.id)}</div>
         <div class="claude-card-meta">
           <span class="claude-card-status ${statusCls}">${esc(b.processing_status || 'unknown')}</span>
-          ${pct ? `<span>${esc(pct)}</span>` : ''}
-          ${b.created_at ? `<span>${new Date(b.created_at * 1000).toLocaleString()}</span>` : ''}
+          <span>${esc(countStr)}</span>
+          ${ts ? `<span>${esc(ts)}</span>` : ''}
         </div>
-        ${b.processing_status !== 'ended' ? `<div style="margin-top:6px"><button class="sm-btn" style="font-size:11px" onclick="cancelClaudeBatch('${esc(b.id)}')">Cancel</button></div>` : ''}
+        <div style="margin-top:6px;display:flex;gap:6px">
+          ${b.processing_status !== 'ended' ? `<button class="sm-btn" style="font-size:11px" onclick="cancelClaudeBatch('${esc(b.id)}')">Cancel</button>` : ''}
+          ${b.processing_status === 'ended' ? `<button class="sm-btn" style="font-size:11px" onclick="downloadClaudeBatchResults('${esc(b.id)}')">Download results</button>` : ''}
+        </div>
       </div>`;
     }).join('');
-    if (body) body.innerHTML = batchHtml;
-    if (list) list.innerHTML = batches.map(b => `<div style="padding:8px 10px;font-size:12px;border-bottom:1px solid var(--border)">${esc(b.id.slice(-8))} <span style="color:var(--muted);font-size:11px">${esc(b.processing_status||'')}</span></div>`).join('');
+    if (bodyEl) bodyEl.innerHTML = newBatchForm + batchHtml;
+    if (list) list.innerHTML = batches.map(b => `<div style="padding:8px 10px;font-size:12px;border-bottom:1px solid var(--border)"><span style="font-family:ui-monospace,monospace;font-size:11px">${esc(b.id.slice(-12))}</span> <span style="color:var(--muted);font-size:11px">${esc(b.processing_status||'')}</span></div>`).join('');
   } catch(e) {
-    if (body) body.innerHTML = `<div class="claude-empty" style="color:var(--accent)">${esc(e.message)}</div>`;
+    if (bodyEl) bodyEl.innerHTML = `<div class="claude-empty" style="color:var(--accent)">${esc(e.message)}</div>`;
+  }
+}
+
+async function submitClaudeBatch() {
+  const statusEl = document.getElementById('claudeBatchSubmitStatus');
+  const ta = document.getElementById('claudeBatchRequestsTA');
+  if (!ta) return;
+  let requests;
+  try {
+    requests = JSON.parse(ta.value.trim());
+    if (!Array.isArray(requests)) throw new Error('Must be a JSON array');
+  } catch(e) {
+    if (statusEl) statusEl.textContent = 'Invalid JSON: ' + e.message;
+    return;
+  }
+  if (statusEl) statusEl.textContent = 'Submitting…';
+  try {
+    const resp = await api('/api/claude/batches', {method: 'POST', body: JSON.stringify({requests})});
+    if (resp && resp.ok) {
+      if (statusEl) statusEl.textContent = 'Created: ' + (resp.data && resp.data.id ? resp.data.id : 'ok');
+      ta.value = '';
+      await loadClaudeBatches(true);
+    } else {
+      if (statusEl) statusEl.textContent = 'Error: ' + (resp.error || 'unknown');
+    }
+  } catch(e) {
+    if (statusEl) statusEl.textContent = 'Error: ' + e.message;
   }
 }
 
 async function cancelClaudeBatch(batchId) {
   try {
-    await api(`/api/claude/batches/${batchId}/cancel`, {method: 'POST', body: '{}'});
-    await loadClaudeBatches(true);
+    const resp = await api(`/api/claude/batches/${batchId}/cancel`, {method: 'POST', body: '{}'});
+    if (resp && !resp.ok) {
+      if (typeof showToast === 'function') showToast('Cancel failed: ' + (resp.error || 'error'), 'error');
+    } else {
+      await loadClaudeBatches(true);
+    }
   } catch(e) {
     if (typeof showToast === 'function') showToast('Cancel failed: ' + e.message, 'error');
   }
 }
 
+async function downloadClaudeBatchResults(batchId) {
+  try {
+    const resp = await api(`/api/claude/batches/${batchId}/results`);
+    if (!resp.ok) {
+      if (typeof showToast === 'function') showToast('Download failed: ' + (resp.error || 'error'), 'error');
+      return;
+    }
+    const blob = new Blob([JSON.stringify(resp.data || [], null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `batch_${batchId}_results.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch(e) {
+    if (typeof showToast === 'function') showToast('Download failed: ' + e.message, 'error');
+  }
+}
+
 // ── Claude Files ──────────────────────────────────────────────────────────────
 
+const _fmtBytes = n => n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(1) + ' MB';
+
 async function loadClaudeFiles(refresh) {
-  const body = document.getElementById('claudeFilesBody');
+  const bodyEl = document.getElementById('claudeFilesBody');
   const list = document.getElementById('claudeFilesList');
-  if (body) body.innerHTML = '<div class="claude-empty">Loading…</div>';
+  if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">Loading…</div>';
   if (list) list.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div>';
   try {
-    const data = await api('/api/claude/files');
-    if (data && data.error) {
-      const msg = data.error === 'no_key'
-        ? 'Set ANTHROPIC_API_KEY to use Files API.'
-        : (typeof data.error === 'object' ? (data.error.message || JSON.stringify(data.error)) : String(data.error));
-      if (body) body.innerHTML = `<div class="claude-key-banner">${esc(msg)}</div>`;
+    const resp = await api('/api/claude/files');
+    if (!resp.ok) {
+      const msg = resp.error === 'no_key' ? 'Set ANTHROPIC_API_KEY to use Files API.' : (resp.error || 'Error');
+      if (bodyEl) bodyEl.innerHTML = `<div class="claude-key-banner">${esc(msg)}</div>`;
       if (list) list.innerHTML = `<div style="padding:12px;color:var(--muted);font-size:12px">${esc(msg)}</div>`;
       return;
     }
-    const files = (data && data.data) || [];
+    const fileData = resp.data || {};
+    const files = Array.isArray(fileData) ? fileData : (fileData.data || []);
     if (files.length === 0) {
-      if (body) body.innerHTML = '<div class="claude-empty">No files uploaded yet. Use the Upload button above.</div>';
+      if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">No files uploaded yet. Use the Upload button above.</div>';
       if (list) list.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">No files.</div>';
       return;
     }
-    const _fmtBytes = n => n < 1024 ? n + ' B' : n < 1048576 ? (n/1024).toFixed(1) + ' KB' : (n/1048576).toFixed(1) + ' MB';
     const filesHtml = files.map(f => `
       <div class="claude-file-chip">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        <span class="claude-file-chip-name" title="${esc(f.filename)}">${esc(f.filename)}</span>
+        <span class="claude-file-chip-name" title="${esc(f.filename || f.id)}">${esc(f.filename || f.id)}</span>
+        <span style="font-size:10px;color:var(--muted);font-family:ui-monospace,monospace;flex-shrink:0" title="${esc(f.id)}">${esc((f.id||'').slice(-8))}</span>
         <span class="claude-file-chip-size">${f.size ? _fmtBytes(f.size) : ''}</span>
+        <span style="font-size:10px;color:var(--muted);flex-shrink:0">${esc(f.media_type||f.type||'')}</span>
         <button class="claude-file-chip-del" title="Delete" onclick="deleteClaudeFile('${esc(f.id)}')">×</button>
       </div>`).join('');
-    if (body) body.innerHTML = filesHtml;
-    if (list) list.innerHTML = files.map(f => `<div style="padding:8px 10px;font-size:12px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(f.filename)}">${esc(f.filename)}</div>`).join('');
+    if (bodyEl) bodyEl.innerHTML = filesHtml;
+    if (list) list.innerHTML = files.map(f => `<div style="padding:8px 10px;font-size:12px;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(f.filename||f.id)}">${esc(f.filename||f.id)}</div>`).join('');
   } catch(e) {
-    if (body) body.innerHTML = `<div class="claude-empty" style="color:var(--accent)">${esc(e.message)}</div>`;
+    if (bodyEl) bodyEl.innerHTML = `<div class="claude-empty" style="color:var(--accent)">${esc(e.message)}</div>`;
   }
 }
 
 async function deleteClaudeFile(fileId) {
   try {
-    await api(`/api/claude/files/${fileId}`, {method: 'DELETE', body: '{}'});
-    await loadClaudeFiles(true);
+    const resp = await api(`/api/claude/files/${fileId}`, {method: 'DELETE', body: '{}'});
+    if (resp && !resp.ok) {
+      if (typeof showToast === 'function') showToast('Delete failed: ' + (resp.error || 'error'), 'error');
+    } else {
+      await loadClaudeFiles(true);
+    }
   } catch(e) {
     if (typeof showToast === 'function') showToast('Delete failed: ' + e.message, 'error');
   }
@@ -7360,25 +7505,17 @@ async function uploadClaudeFile(file) {
   try {
     const fd = new FormData();
     fd.append('file', file, file.name);
-    const resp = await fetch('api/claude/files/upload', {
-      method: 'POST',
-      body: fd,
-      headers: (() => {
-        const h = {};
-        const tok = window.__HERMES_CONFIG__ && window.__HERMES_CONFIG__.csrfToken;
-        if (tok) h['X-Hermes-CSRF-Token'] = tok;
-        return h;
-      })(),
-    });
-    const data = await resp.json();
-    if (data && data.id) {
-      if (statusEl) statusEl.textContent = 'Uploaded: ' + (data.filename || data.id);
+    const csrfTok = window.__HERMES_CONFIG__ && window.__HERMES_CONFIG__.csrfToken;
+    const fetchHeaders = {};
+    if (csrfTok) fetchHeaders['X-Hermes-CSRF-Token'] = csrfTok;
+    const fetchResp = await fetch('/api/claude/files', {method: 'POST', body: fd, headers: fetchHeaders});
+    const resp = await fetchResp.json();
+    if (resp && resp.ok && resp.data && resp.data.id) {
+      if (statusEl) statusEl.textContent = 'Uploaded: ' + (resp.data.filename || resp.data.id);
       await loadClaudeFiles(true);
     } else {
-      const errMsg = data && data.error
-        ? (typeof data.error === 'object' ? (data.error.message || JSON.stringify(data.error)) : String(data.error))
-        : 'Upload failed';
-      if (statusEl) statusEl.textContent = errMsg;
+      const errMsg = resp.error || 'Upload failed';
+      if (statusEl) statusEl.textContent = String(errMsg);
     }
   } catch(e) {
     if (statusEl) statusEl.textContent = 'Error: ' + e.message;
@@ -7390,36 +7527,32 @@ async function uploadClaudeFile(file) {
 // ── Claude Admin / Usage ──────────────────────────────────────────────────────
 
 async function loadClaudeAdmin(refresh) {
-  const body = document.getElementById('claudeAdminBody');
+  const bodyEl = document.getElementById('claudeAdminBody');
   const sideEl = document.getElementById('claudeAdminSidebar');
-  if (body) body.innerHTML = '<div class="claude-empty">Loading…</div>';
+  if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">Loading…</div>';
   if (sideEl) sideEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div>';
   try {
-    const data = await api('/api/claude/usage');
-    if (data && data.error) {
-      let msg = '';
-      if (data.error === 'no_admin_key' || data.error === 'admin_key_required') {
-        msg = data.message || 'An admin API key (sk-ant-admin…) is required for usage data. Set ANTHROPIC_ADMIN_KEY or use an admin key in Settings → Providers.';
-      } else {
-        msg = typeof data.error === 'object' ? (data.error.message || JSON.stringify(data.error)) : String(data.error);
+    const resp = await api('/api/claude/usage');
+    if (!resp.ok) {
+      let msg = resp.error || 'Error';
+      if (String(msg).includes('no_admin_key') || String(msg).includes('admin_key_required')) {
+        msg = 'An admin API key (sk-ant-admin…) is required. Set ANTHROPIC_ADMIN_KEY or add it in Settings → Providers.';
       }
-      if (body) body.innerHTML = `<div class="claude-key-banner">${esc(msg)}</div>`;
-      if (sideEl) sideEl.innerHTML = `<div style="padding:12px;color:var(--muted);font-size:12px">Admin key required.</div>`;
+      if (bodyEl) bodyEl.innerHTML = `<div class="claude-key-banner">${esc(msg)}</div>`;
+      if (sideEl) sideEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Admin key required.</div>';
       return;
     }
-    const usage = (data && data.data) || [];
+    const usageData = resp.data || {};
+    const usage = Array.isArray(usageData) ? usageData : (usageData.data || []);
     if (!usage.length) {
-      if (body) body.innerHTML = '<div class="claude-empty">No usage data found.</div>';
+      if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">No usage data found.</div>';
       if (sideEl) sideEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">No data.</div>';
       return;
     }
     let totalIn = 0, totalOut = 0;
-    usage.forEach(u => {
-      totalIn += (u.input_tokens || 0);
-      totalOut += (u.output_tokens || 0);
-    });
+    usage.forEach(u => { totalIn += (u.input_tokens || 0); totalOut += (u.output_tokens || 0); });
     const fmtNum = n => n >= 1e6 ? (n/1e6).toFixed(2)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
-    if (body) body.innerHTML = `
+    if (bodyEl) bodyEl.innerHTML = `
       <div class="claude-section-head">Summary</div>
       <div class="claude-admin-grid">
         <div class="claude-admin-stat"><div class="claude-admin-stat-label">Total input tokens</div><div class="claude-admin-stat-value">${fmtNum(totalIn)}</div></div>
@@ -7428,7 +7561,7 @@ async function loadClaudeAdmin(refresh) {
       </div>
       <div class="claude-section-head" style="margin-top:16px">Recent Usage</div>
       ${usage.slice(0, 20).map(u => `<div class="claude-card">
-        <div class="claude-card-title">${esc(u.model || u.organization || 'Record')}</div>
+        <div class="claude-card-title">${esc(u.model || u.organization_name || 'Record')}</div>
         <div class="claude-card-meta">
           ${u.input_tokens ? `<span>In: ${fmtNum(u.input_tokens)}</span>` : ''}
           ${u.output_tokens ? `<span>Out: ${fmtNum(u.output_tokens)}</span>` : ''}
@@ -7437,7 +7570,65 @@ async function loadClaudeAdmin(refresh) {
       </div>`).join('')}`;
     if (sideEl) sideEl.innerHTML = `<div style="padding:8px 12px;font-size:12px"><div style="color:var(--muted);font-size:11px">In tokens</div><div style="font-weight:600">${fmtNum(totalIn)}</div><div style="color:var(--muted);font-size:11px;margin-top:8px">Out tokens</div><div style="font-weight:600">${fmtNum(totalOut)}</div></div>`;
   } catch(e) {
-    if (body) body.innerHTML = `<div class="claude-empty" style="color:var(--accent)">${esc(e.message)}</div>`;
+    if (bodyEl) bodyEl.innerHTML = `<div class="claude-empty" style="color:var(--accent)">${esc(e.message)}</div>`;
+  }
+}
+
+// ── Anthropic key settings ────────────────────────────────────────────────────
+
+let _claudeKeysDirty = false;
+
+function _claudeKeyDirty() { _claudeKeysDirty = true; }
+
+async function saveAnthropicKeys() {
+  const apiKeyEl = document.getElementById('anthropicApiKeyInput');
+  const adminKeyEl = document.getElementById('anthropicAdminKeyInput');
+  const statusEl = document.getElementById('claudeTestConnStatus');
+  if (!apiKeyEl) return;
+  const apiKey = apiKeyEl.value.trim();
+  const adminKey = adminKeyEl ? adminKeyEl.value.trim() : '';
+  if (statusEl) statusEl.textContent = 'Saving…';
+  try {
+    const payload = {};
+    if (apiKey) payload.anthropic_api_key = apiKey;
+    if (adminKey) payload.anthropic_admin_key = adminKey;
+    const resp = await api('/api/settings/save', {method: 'POST', body: JSON.stringify(payload)});
+    if (resp && (resp.ok || resp.saved)) {
+      if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = 'var(--accent)'; }
+      _claudeKeysDirty = false;
+      setTimeout(() => { if (statusEl) { statusEl.textContent = ''; statusEl.style.color = ''; } }, 3000);
+    } else {
+      if (statusEl) { statusEl.textContent = 'Save failed: ' + (resp.error || 'error'); statusEl.style.color = 'var(--accent)'; }
+    }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = 'Error: ' + e.message; statusEl.style.color = 'var(--accent)'; }
+  }
+}
+
+async function testClaudeConnection() {
+  const statusEl = document.getElementById('claudeTestConnStatus');
+  const btn = document.getElementById('claudeTestConnBtn');
+  if (statusEl) { statusEl.textContent = 'Testing…'; statusEl.style.color = 'var(--muted)'; }
+  if (btn) btn.disabled = true;
+  try {
+    if (_claudeKeysDirty) await saveAnthropicKeys();
+    const resp = await api('/api/claude/models');
+    if (resp && resp.ok && resp.data) {
+      const models = Array.isArray(resp.data) ? resp.data : (resp.data.data || []);
+      if (statusEl) {
+        statusEl.textContent = `✓ Connected — ${models.length} model${models.length !== 1 ? 's' : ''} available`;
+        statusEl.style.color = '#22c55e';
+      }
+    } else {
+      if (statusEl) {
+        statusEl.textContent = '✗ ' + (resp.error || 'Connection failed');
+        statusEl.style.color = 'var(--accent)';
+      }
+    }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = '✗ ' + e.message; statusEl.style.color = 'var(--accent)'; }
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

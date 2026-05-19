@@ -1329,6 +1329,28 @@
             <div id="providersEmpty" style="display:none;text-align:center;padding:32px 0;color:var(--muted);font-size:13px" data-i18n="providers_empty">
               No configurable providers found.
             </div>
+            <!-- Anthropic / Claude key configuration -->
+            <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:16px">
+              <div class="settings-section-title" style="font-size:13px;margin-bottom:4px">Anthropic (Claude)</div>
+              <div class="settings-section-meta" style="font-size:12px;color:var(--muted);margin-bottom:12px">Keys are stored in your profile settings and never logged. Admin key (sk-ant-admin…) unlocks Usage &amp; Admin panels.</div>
+              <div class="claude-key-row">
+                <label for="anthropicApiKeyInput">API Key</label>
+                <div class="claude-key-input-row">
+                  <input id="anthropicApiKeyInput" type="password" placeholder="sk-ant-api…" autocomplete="off" oninput="_claudeKeyDirty()">
+                  <button class="sm-btn claude-key-save-btn" onclick="saveAnthropicKeys()">Save</button>
+                </div>
+              </div>
+              <div class="claude-key-row">
+                <label for="anthropicAdminKeyInput">Admin API Key <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+                <div class="claude-key-input-row">
+                  <input id="anthropicAdminKeyInput" type="password" placeholder="sk-ant-admin…" autocomplete="off" oninput="_claudeKeyDirty()">
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+                <button class="sm-btn" onclick="testClaudeConnection()" id="claudeTestConnBtn">Test connection</button>
+                <span id="claudeTestConnStatus" style="font-size:12px;color:var(--muted)"></span>
+              </div>
+            </div>
           </div>
           <div class="settings-pane" id="settingsPanePlugins">
             <div class="settings-section-head">
