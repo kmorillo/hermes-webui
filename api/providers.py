@@ -2185,6 +2185,118 @@ def _get_probe_status(pid: str, key: str) -> tuple[str, str]:
     return ("connected" if valid else "unreachable"), fmt_reason
 
 
+def probe_provider_sync(provider_id: str) -> dict[str, Any]:
+    """Run a live connectivity probe for *provider_id* and return the result.
+
+    Unlike :func:`_get_probe_status`, this function runs the probe
+    synchronously (blocking the caller) rather than in a background thread.
+    It is intended for the ``/api/providers/probe`` endpoint which is called
+    immediately after the user saves a new API key so the UI can show live
+    "Connected ✓" or error feedback without waiting for a cache warm-up.
+
+    Returns a dict with keys:
+    - ``ok``: True when the probe succeeded
+    - ``status``: ``"connected"`` | ``"unreachable"`` | ``"missing_key"``
+      | ``"error"``
+    - ``reason``: short code explaining a non-connected status (empty on success)
+    - ``message``: human-readable message suitable for displaying in the UI
+    """
+    provider_id = (provider_id or "").strip().lower()
+    if not provider_id:
+        return {"ok": False, "status": "error", "reason": "no_provider", "message": "No provider specified."}
+
+    display = _PROVIDER_DISPLAY.get(provider_id, provider_id.replace("-", " ").title())
+
+    # Read the key from env file / process env / config.yaml
+    env_var = _PROVIDER_ENV_VAR.get(provider_id, "")
+    raw_key = ""
+    if env_var:
+        env_path = _get_hermes_home() / ".env"
+        env_vals = _load_env_file(env_path)
+        raw_key = env_vals.get(env_var) or os.getenv(env_var) or ""
+    if not raw_key:
+        try:
+            _cfg = get_config()
+            _pcfg = _cfg.get("providers", {})
+            if isinstance(_pcfg, dict):
+                _entry = _pcfg.get(provider_id, {})
+                if isinstance(_entry, dict):
+                    raw_key = str(_entry.get("api_key") or "")
+        except Exception:
+            pass
+
+    if not raw_key:
+        return {
+            "ok": False,
+            "status": "missing_key",
+            "reason": "no_key",
+            "message": f"No API key found for {display}.",
+        }
+
+    probe_url = _PROVIDER_PROBE_URL.get(provider_id)
+    if not probe_url:
+        # No network probe available — fall back to format validation only
+        valid, fmt_reason = _validate_key_format(provider_id, raw_key)
+        if valid:
+            return {"ok": True, "status": "connected", "reason": "", "message": f"{display} key format looks valid."}
+        _reason_messages = {
+            "key_format_invalid": f"{display} key format looks invalid — double-check it.",
+            "key_too_short": f"{display} key appears too short — paste the full key.",
+        }
+        msg = _reason_messages.get(fmt_reason, f"{display} key could not be validated.")
+        return {"ok": False, "status": "unreachable", "reason": fmt_reason, "message": msg}
+
+    # Run synchronous probe
+    try:
+        import requests as _req
+        resp = _req.get(
+            probe_url,
+            headers=_make_probe_headers(provider_id, raw_key),
+            params=_make_probe_params(provider_id, raw_key),
+            timeout=6,
+            allow_redirects=True,
+        )
+        code = resp.status_code
+        if 200 <= code < 300:
+            status, reason = "connected", ""
+        elif code in (401, 403):
+            status, reason = "unreachable", "auth_rejected"
+        elif code == 429:
+            status, reason = "connected", ""
+        else:
+            status, reason = "unreachable", f"http_{code}"
+    except Exception:
+        status, reason = "unreachable", "network_error"
+        code = 0
+
+    # Update the shared probe cache so the next /api/providers/status call
+    # returns the result of this live probe rather than re-launching a thread.
+    with _probe_cache_lock:
+        _probe_cache[provider_id] = (status, reason, time.monotonic())
+
+    if status == "connected":
+        return {
+            "ok": True,
+            "status": "connected",
+            "reason": "",
+            "message": f"{display} key is valid — connection successful.",
+        }
+
+    _reason_messages = {
+        "auth_rejected": f"Key rejected by {display} — got {code if code else 'auth error'} (401/403). Check the key and try again.",
+        "network_error": f"Could not reach {display}. Check your network connection.",
+        "key_format_invalid": f"{display} key format looks invalid — double-check it.",
+        "key_too_short": f"{display} key appears too short — paste the full key.",
+    }
+    if reason.startswith("http_"):
+        http_code = reason[5:]
+        msg = f"{display} returned HTTP {http_code}. The key may be invalid or the service may be down."
+    else:
+        msg = _reason_messages.get(reason, f"{display} connection failed ({reason}).")
+
+    return {"ok": False, "status": status, "reason": reason, "message": msg}
+
+
 def _validate_key_format(pid: str, key: str) -> tuple[bool, str]:
     """Lightweight format check — no network probe.
 

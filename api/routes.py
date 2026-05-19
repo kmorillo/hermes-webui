@@ -2217,7 +2217,7 @@ from api.run_journal import (
     read_run_events,
     stale_interrupted_event,
 )
-from api.providers import get_providers, get_provider_quota, get_provider_cost_history, set_provider_key, remove_provider_key, get_providers_status
+from api.providers import get_providers, get_provider_quota, get_provider_cost_history, set_provider_key, remove_provider_key, get_providers_status, probe_provider_sync
 from api.onboarding import (
     apply_onboarding_setup,
     get_onboarding_status,
@@ -4665,6 +4665,13 @@ def handle_post(handler, parsed) -> bool:
         result = remove_provider_key(provider_id)
         if not result.get("ok"):
             return bad(handler, result.get("error", "Unknown error"))
+        return j(handler, result)
+
+    if parsed.path == "/api/providers/probe":
+        provider_id = (body.get("provider") or "").strip().lower()
+        if not provider_id:
+            return bad(handler, "provider is required")
+        result = probe_provider_sync(provider_id)
         return j(handler, result)
 
     if parsed.path == "/api/reasoning":

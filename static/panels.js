@@ -6144,9 +6144,34 @@ async function _saveConnectivityKey(pid){
     // Anthropic keys can also go through /api/settings for the admin key path,
     // but the standard API key path is the same: /api/providers
     await api('/api/providers',{method:'POST',body:JSON.stringify({provider:pid,api_key:key})});
-    if(status){status.textContent='Saved.';status.style.color='#22c55e';}
+    if(status){status.textContent='Saved. Testing connection…';status.style.color='var(--muted)';}
     input.value='';
-    setTimeout(()=>{ loadConnectivityPanel(); _refreshProviderStatusUI(); },400);
+    // Auto-probe: verify the key is actually valid against the provider's API
+    try{
+      const probe=await api('/api/providers/probe',{method:'POST',body:JSON.stringify({provider:pid})});
+      if(probe.ok){
+        if(status){status.textContent='Connected ✓';status.style.color='#22c55e';}
+        // Update the badge in the card header optimistically
+        const card=document.querySelector('.conn-card[data-pid="'+pid+'"]');
+        if(card){
+          const badge=card.querySelector('.conn-badge');
+          if(badge){badge.textContent='Connected ✓';badge.className='conn-badge conn-badge--ok';}
+        }
+      }else{
+        const msg=probe.message||'Connection failed.';
+        if(status){status.textContent=msg;status.style.color='var(--error,#f87171)';}
+        // Update the badge to reflect the unreachable state
+        const card=document.querySelector('.conn-card[data-pid="'+pid+'"]');
+        if(card){
+          const badge=card.querySelector('.conn-badge');
+          if(badge){badge.textContent='Unreachable';badge.className='conn-badge conn-badge--error';}
+        }
+      }
+    }catch(probeErr){
+      // Probe endpoint unreachable — fall back to optimistic "Saved" message
+      if(status){status.textContent='Saved.';status.style.color='#22c55e';}
+    }
+    setTimeout(()=>{ loadConnectivityPanel(); _refreshProviderStatusUI(); },1500);
   }catch(e){
     if(status){status.textContent='Error: '+esc(e.message||'Save failed');status.style.color='var(--error,#f87171)';}
   }
