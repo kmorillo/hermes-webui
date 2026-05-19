@@ -2159,6 +2159,7 @@ _PROBE_TTL = 300.0  # 5 minutes
 # Provider probe configuration: URL, how to attach the key, expected 2xx codes.
 _PROVIDER_PROBE_URL: dict[str, str] = {
     "anthropic": "https://api.anthropic.com/v1/models",
+    "cursor": "https://api.cursor.sh/v1/models",
     "openai": "https://api.openai.com/v1/models",
     "openrouter": "https://openrouter.ai/api/v1/models",
     "gemini": "https://generativelanguage.googleapis.com/v1beta/models",
