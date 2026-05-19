@@ -6095,14 +6095,21 @@ function _buildConnectivityCard(p){
     const agentDir=p.agent_dir||'';
     let hermesHtml='';
     if(p.reason==='agent_dir_not_found'){
-      const expectedPath=agentDir?`<br>Expected location: <code style="font-size:11px;word-break:break-all">${esc(agentDir)}</code>`:'';
-      hermesHtml=`<span style="color:var(--error,#f87171);font-weight:500">Agent directory not found.</span>${expectedPath}
-        <br><br>Hermes agent features will not work until the agent directory is located.
-        <br><br><strong>To fix, set one of these environment variables before starting the server:</strong>
-        <pre style="margin:6px 0;padding:6px 8px;background:var(--code-bg,rgba(0,0,0,.2));border-radius:4px;font-size:11px;white-space:pre-wrap;word-break:break-all">export HERMES_WEBUI_AGENT_DIR=/path/to/hermes-agent
-export HERMES_HOME=/path/to/.hermes</pre>
-        Or clone the agent as a sibling of this repo:
-        <pre style="margin:6px 0;padding:6px 8px;background:var(--code-bg,rgba(0,0,0,.2));border-radius:4px;font-size:11px;white-space:pre-wrap;word-break:break-all">git clone &lt;hermes-agent-repo&gt; ../hermes-agent</pre>`;
+      hermesHtml=`<span style="color:var(--error,#f87171);font-weight:500">Agent directory not found.</span>
+        <br>Hermes agent features will not work until the directory is located.
+        <br><br>
+        <div class="conn-card-field">
+          <label class="conn-card-label">Agent directory path</label>
+          <div class="conn-card-row">
+            <input class="conn-card-input" type="text" id="connHermesPathInput" value="${esc(agentDir)}" placeholder="/path/to/hermes-agent" autocomplete="off" spellcheck="false" style="font-family:ui-monospace,monospace;font-size:11px">
+            <button class="conn-card-btn conn-card-btn-primary" onclick="_saveHermesAgentDir()">Save</button>
+          </div>
+          <div class="conn-card-status" id="connHermesPathStatus" style="font-size:11px;margin-top:4px"></div>
+        </div>
+        <div style="margin-top:10px;color:var(--muted);font-size:11px">
+          Or set the env var before starting the server:
+          <pre style="margin:4px 0;padding:6px 8px;background:var(--code-bg,rgba(0,0,0,.2));border-radius:4px;white-space:pre-wrap;word-break:break-all">export HERMES_WEBUI_AGENT_DIR=/path/to/hermes-agent</pre>
+        </div>`;
     } else {
       const dirLine=agentDir?`<br><span style="color:var(--muted);font-size:11px">Agent directory: <code style="font-size:11px">${esc(agentDir)}</code></span>`:'';
       hermesHtml=`Hermes runs locally — no API key required.${dirLine}`;
@@ -6131,6 +6138,37 @@ function _toggleConnCard(btn){
   if(!card) return;
   const open=card.classList.toggle('open');
   btn.setAttribute('aria-expanded',open);
+}
+
+async function _saveHermesAgentDir(){
+  const input=document.getElementById('connHermesPathInput');
+  const status=document.getElementById('connHermesPathStatus');
+  if(!input) return;
+  const path=input.value.trim();
+  if(!path){
+    if(status){status.textContent='Enter a path first.';status.style.color='var(--muted)';}
+    return;
+  }
+  if(status){status.textContent='Saving…';status.style.color='var(--muted)';}
+  try{
+    const resp=await api('/api/providers/hermes-agent-dir',{method:'POST',body:JSON.stringify({path})});
+    if(resp&&resp.ok){
+      if(status){status.textContent='Connected ✓ — agent directory set.';status.style.color='#22c55e';}
+      // Update the badge on the Hermes card header immediately
+      const card=input.closest('.conn-card');
+      if(card){
+        const badge=card.querySelector('.conn-badge');
+        if(badge){badge.textContent='Connected';badge.className='conn-badge conn-badge--ok';}
+      }
+      // Reload the full connectivity panel after a short pause so the user sees the confirmation
+      setTimeout(()=>loadConnectivityPanel(),1500);
+    } else {
+      const msg=(resp&&resp.error)||'Unknown error';
+      if(status){status.textContent='Error: '+msg;status.style.color='var(--error,#f87171)';}
+    }
+  }catch(e){
+    if(status){status.textContent='Error: '+e.message;status.style.color='var(--error,#f87171)';}
+  }
 }
 
 async function _saveConnectivityKey(pid){

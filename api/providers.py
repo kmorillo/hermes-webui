@@ -2055,6 +2055,72 @@ def set_provider_key(provider_id: str, api_key: str | None) -> dict[str, Any]:
     }
 
 
+def set_agent_dir(path: str) -> dict[str, Any]:
+    """Persist the Hermes agent directory path and re-trigger discovery.
+
+    1. Validates the candidate path (must exist and contain run_agent.py).
+    2. Writes HERMES_WEBUI_AGENT_DIR to ~/.hermes/.env so it survives restarts.
+    3. Updates os.environ so the running process picks it up immediately.
+    4. Re-runs _discover_agent_dir() and updates api.config._AGENT_DIR +
+       _AGENT_DIR_CANDIDATE so /api/providers/status reflects the change
+       without a server restart.
+
+    Returns a status dict with ok, agent_dir, and an optional error key.
+    """
+    if not path or not path.strip():
+        return {"ok": False, "error": "Path is required."}
+
+    import api.config as _cfg
+    from pathlib import Path as _Path
+
+    candidate = _Path(path.strip()).expanduser().resolve()
+
+    if not candidate.exists():
+        return {
+            "ok": False,
+            "error": f"Directory not found: {candidate}",
+        }
+    if not candidate.is_dir():
+        return {
+            "ok": False,
+            "error": f"Not a directory: {candidate}",
+        }
+    if not (candidate / "run_agent.py").exists():
+        return {
+            "ok": False,
+            "error": f"run_agent.py not found in {candidate} — are you sure this is the Hermes agent directory?",
+        }
+
+    # Persist to ~/.hermes/.env so it survives restarts
+    env_path = _get_hermes_home() / ".env"
+    try:
+        _write_env_file(env_path, {"HERMES_WEBUI_AGENT_DIR": str(candidate)})
+    except Exception as exc:
+        logger.exception("Failed to write HERMES_WEBUI_AGENT_DIR to env file")
+        return {"ok": False, "error": f"Failed to save path: {exc}"}
+
+    # Update the running process so discovery sees it immediately
+    os.environ["HERMES_WEBUI_AGENT_DIR"] = str(candidate)
+
+    # Re-run discovery and patch the module globals
+    new_agent_dir = _cfg._discover_agent_dir()
+    _cfg._AGENT_DIR = new_agent_dir
+    _cfg._AGENT_DIR_CANDIDATE = str(candidate)
+
+    # Also update sys.path so Hermes modules become importable
+    if new_agent_dir is not None:
+        import sys
+        agent_str = str(new_agent_dir)
+        if agent_str not in sys.path:
+            sys.path.append(agent_str)
+
+    return {
+        "ok": True,
+        "agent_dir": str(candidate),
+        "message": f"Agent directory set to {candidate}",
+    }
+
+
 def remove_provider_key(provider_id: str) -> dict[str, Any]:
     """Remove the API key for a provider.
 

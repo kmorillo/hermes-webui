@@ -2217,7 +2217,7 @@ from api.run_journal import (
     read_run_events,
     stale_interrupted_event,
 )
-from api.providers import get_providers, get_provider_quota, get_provider_cost_history, set_provider_key, remove_provider_key, get_providers_status, probe_provider_sync
+from api.providers import get_providers, get_provider_quota, get_provider_cost_history, set_provider_key, remove_provider_key, get_providers_status, probe_provider_sync, set_agent_dir
 from api.onboarding import (
     apply_onboarding_setup,
     get_onboarding_status,
@@ -4672,6 +4672,13 @@ def handle_post(handler, parsed) -> bool:
         if not provider_id:
             return bad(handler, "provider is required")
         result = probe_provider_sync(provider_id)
+        return j(handler, result)
+
+    if parsed.path == "/api/providers/hermes-agent-dir":
+        path = (body.get("path") or "").strip()
+        if not path:
+            return bad(handler, "path is required")
+        result = set_agent_dir(path)
         return j(handler, result)
 
     if parsed.path == "/api/reasoning":
