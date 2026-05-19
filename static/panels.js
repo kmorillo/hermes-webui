@@ -6184,6 +6184,10 @@ async function _saveConnectivityKey(pid){
     await api('/api/providers',{method:'POST',body:JSON.stringify({provider:pid,api_key:key})});
     if(status){status.textContent='Saved. Testing connection…';status.style.color='var(--muted)';}
     input.value='';
+    // Refresh tab visibility immediately so provider tabs appear without waiting
+    // for the probe to complete (format-based status check treats a saved key as
+    // connected while the live probe is still in-flight).
+    _refreshProviderStatusUI();
     // Auto-probe: verify the key is actually valid against the provider's API
     try{
       const probe=await api('/api/providers/probe',{method:'POST',body:JSON.stringify({provider:pid})});
@@ -6221,6 +6225,8 @@ async function _removeConnectivityKey(pid){
   try{
     await api('/api/providers/delete',{method:'POST',body:JSON.stringify({provider:pid})});
     if(status){status.textContent='Removed.';status.style.color='var(--muted)';}
+    // Refresh tab visibility immediately so provider tabs vanish without a page reload.
+    _refreshProviderStatusUI();
     setTimeout(()=>{ loadConnectivityPanel(); _refreshProviderStatusUI(); },400);
   }catch(e){
     if(status){status.textContent='Error: '+esc(e.message||'Remove failed');status.style.color='var(--error,#f87171)';}
