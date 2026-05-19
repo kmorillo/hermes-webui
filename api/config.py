@@ -190,6 +190,25 @@ def _discover_python(agent_dir: Path) -> str:
 _AGENT_DIR = _discover_agent_dir()
 PYTHON_EXE = _discover_python(_AGENT_DIR)
 
+# Primary candidate path for the agent directory, regardless of whether it exists.
+# Used by the Connectivity panel to show users *where* to place the agent checkout
+# even when discovery fails.  Priority mirrors _discover_agent_dir():
+#   1. HERMES_WEBUI_AGENT_DIR env var (explicit override)
+#   2. HERMES_HOME / hermes-agent (default conventional location)
+def _resolve_agent_dir_candidate() -> str:
+    """Return the best candidate agent-directory path as a display string.
+
+    Unlike _AGENT_DIR (which is None when no valid directory is found), this
+    always returns a non-empty string so the UI can show the *expected* path
+    even in the unreachable case.
+    """
+    if os.getenv("HERMES_WEBUI_AGENT_DIR"):
+        return str(Path(os.getenv("HERMES_WEBUI_AGENT_DIR")).expanduser().resolve())
+    hermes_home = os.getenv("HERMES_HOME", str(HOME / ".hermes"))
+    return str(Path(hermes_home).expanduser() / "hermes-agent")
+
+_AGENT_DIR_CANDIDATE: str = _resolve_agent_dir_candidate()
+
 # ── Inject agent dir into sys.path so Hermes modules are importable ──────────
 
 # When users (or CI builds) run `pip install --target .` or
@@ -712,6 +731,7 @@ _PROVIDER_DISPLAY = {
     "x-ai": "xAI",
     "nvidia": "NVIDIA NIM",
     "xiaomi": "Xiaomi",
+    "cursor": "Cursor",
 }
 
 # Provider alias → canonical slug.  Users configure providers using the

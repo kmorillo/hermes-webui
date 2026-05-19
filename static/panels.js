@@ -6022,7 +6022,7 @@ async function loadConnectivityPanel(){
     const data=await api('/api/providers/status');
     const providers=data.providers||{};
     // Display order: local agent first, then API key providers, then OAuth providers
-    const order=['hermes','anthropic','openai','openrouter','gemini','deepseek','ollama','lmstudio','openai-codex','copilot'];
+    const order=['hermes','anthropic','openai','openrouter','gemini','deepseek','ollama','lmstudio','cursor','openai-codex','copilot'];
     list.innerHTML='';
     for(const pid of order){
       const p=providers[pid];
@@ -6050,19 +6050,26 @@ function _buildConnectivityCard(p){
   const _reasonHints={
     'key_format_invalid': 'Key format looks invalid — double-check it and save again.',
     'key_too_short': 'Key appears too short — paste the full key and save again.',
-    'agent_not_found': 'Hermes agent directory not found. Start the agent from your terminal.',
+    'agent_dir_not_found': 'Hermes agent directory not found. Start the agent from your terminal.',
   };
   const reasonHint=isUnreachable&&p.reason?(_reasonHints[p.reason]||''):'';
+
+  // Provider-specific setup hints shown below the API key input
+  const _providerSetupHints={
+    'cursor': 'Get your API key from <a href="https://www.cursor.com/settings" target="_blank" rel="noopener noreferrer" style="color:var(--link,#60a5fa)">Cursor Settings → API Keys</a>. Set <code>CURSOR_API_KEY</code> or paste it here.',
+  };
 
   let bodyHtml='';
   if(p.configurable && p.auth_type==='api_key'){
     // Mask hint when key is already configured
     const placeholder=isConnected?'Enter new key to replace existing…':'Paste API key…';
+    const providerHint=_providerSetupHints[p.id]||'';
     bodyHtml=`<div class="conn-card-body">
       <div class="conn-card-field">
         <label class="conn-card-label">API Key${p.env_var?' <span style="font-weight:400;color:var(--muted);">('+esc(p.env_var)+')</span>':''}
         </label>
         ${reasonHint?`<div class="conn-card-reason">${esc(reasonHint)}</div>`:''}
+        ${providerHint&&!isConnected?`<div class="conn-card-reason" style="color:var(--muted)">${providerHint}</div>`:''}
         <div class="conn-card-row">
           <input class="conn-card-input" type="password" id="connInput_${esc(p.id)}" placeholder="${esc(placeholder)}" autocomplete="off">
           <button class="conn-card-btn conn-card-btn-primary" onclick="_saveConnectivityKey('${esc(p.id)}')">Save</button>
@@ -6085,10 +6092,22 @@ function _buildConnectivityCard(p){
       </div>
     </div>`;
   } else if(p.id==='hermes'){
-    const hermesHint=p.reason==='agent_not_found'
-      ?'<span style="color:var(--error,#f87171)">Agent directory not found.</span> Start the Hermes agent from your terminal to connect.'
-      :'Hermes runs locally — no API key required. Start the agent from the terminal to connect.';
-    bodyHtml=`<div class="conn-card-body"><div style="font-size:12px;color:var(--muted);line-height:1.55">${hermesHint}</div></div>`;
+    const agentDir=p.agent_dir||'';
+    let hermesHtml='';
+    if(p.reason==='agent_dir_not_found'){
+      const expectedPath=agentDir?`<br>Expected location: <code style="font-size:11px;word-break:break-all">${esc(agentDir)}</code>`:'';
+      hermesHtml=`<span style="color:var(--error,#f87171);font-weight:500">Agent directory not found.</span>${expectedPath}
+        <br><br>Hermes agent features will not work until the agent directory is located.
+        <br><br><strong>To fix, set one of these environment variables before starting the server:</strong>
+        <pre style="margin:6px 0;padding:6px 8px;background:var(--code-bg,rgba(0,0,0,.2));border-radius:4px;font-size:11px;white-space:pre-wrap;word-break:break-all">export HERMES_WEBUI_AGENT_DIR=/path/to/hermes-agent
+export HERMES_HOME=/path/to/.hermes</pre>
+        Or clone the agent as a sibling of this repo:
+        <pre style="margin:6px 0;padding:6px 8px;background:var(--code-bg,rgba(0,0,0,.2));border-radius:4px;font-size:11px;white-space:pre-wrap;word-break:break-all">git clone &lt;hermes-agent-repo&gt; ../hermes-agent</pre>`;
+    } else {
+      const dirLine=agentDir?`<br><span style="color:var(--muted);font-size:11px">Agent directory: <code style="font-size:11px">${esc(agentDir)}</code></span>`:'';
+      hermesHtml=`Hermes runs locally — no API key required.${dirLine}`;
+    }
+    bodyHtml=`<div class="conn-card-body"><div style="font-size:12px;color:var(--muted);line-height:1.55">${hermesHtml}</div></div>`;
   } else if(p.type==='local_api'){
     bodyHtml=`<div class="conn-card-body"><div style="font-size:12px;color:var(--muted);line-height:1.55">${esc(p.label)} is a local service. Start it on your machine and configure the base URL in <code>config.yaml</code> if needed.</div></div>`;
   }

@@ -650,6 +650,7 @@ _PROVIDER_ENV_VAR: dict[str, str] = {
     "xiaomi": "XIAOMI_API_KEY",
     "opencode-zen": "OPENCODE_ZEN_API_KEY",
     "opencode-go": "OPENCODE_GO_API_KEY",
+    "cursor": "CURSOR_API_KEY",
     # NOTE: bare "ollama" (local) deliberately omitted — local Ollama is keyless
     # by default and the runtime in hermes_cli/runtime_provider.py only consumes
     # OLLAMA_API_KEY when the base URL hostname is ollama.com (Ollama Cloud).
@@ -2240,8 +2241,12 @@ def get_providers_status() -> dict[str, Any]:
     statuses: dict[str, Any] = {}
 
     # ── Hermes local agent ────────────────────────────────────────────────────
+    from api.config import _AGENT_DIR, _AGENT_DIR_CANDIDATE
     hermes_status = "connected" if _HERMES_FOUND else "unreachable"
-    hermes_reason = "" if _HERMES_FOUND else "agent_not_found"
+    hermes_reason = "" if _HERMES_FOUND else "agent_dir_not_found"
+    # agent_dir: resolved path when found, else the primary candidate so the UI
+    # can tell users exactly where to place the hermes-agent checkout.
+    hermes_agent_dir = str(_AGENT_DIR) if _AGENT_DIR else _AGENT_DIR_CANDIDATE
     statuses["hermes"] = {
         "id": "hermes",
         "label": "Hermes",
@@ -2252,6 +2257,7 @@ def get_providers_status() -> dict[str, Any]:
         "configurable": False,
         "env_var": "",
         "reason": hermes_reason,
+        "agent_dir": hermes_agent_dir,
     }
 
     # ── API key providers ─────────────────────────────────────────────────────
@@ -2263,6 +2269,7 @@ def get_providers_status() -> dict[str, Any]:
         "deepseek",
         "ollama",
         "lmstudio",
+        "cursor",
     ]
 
     for pid in _STATUS_API_PROVIDERS:
