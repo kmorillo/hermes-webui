@@ -2231,6 +2231,7 @@ def remove_provider_key(provider_id: str) -> dict[str, Any]:
 
 _KEY_FORMAT_PREFIXES: dict[str, str] = {
     "anthropic": "sk-ant-",
+    "cursor": "key_",
     "openai": "sk-",
     "openrouter": "sk-or-",
 }
