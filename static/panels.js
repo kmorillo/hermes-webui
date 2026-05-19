@@ -5303,16 +5303,17 @@ let _settingsPreferencesAutosaveTimer = null;
 let _settingsPreferencesAutosaveRetryPayload = null;
 
 function switchSettingsSection(name){
-  const section=(name==='appearance'||name==='preferences'||name==='providers'||name==='plugins'||name==='system')?name:'conversation';
+  const validSections=['appearance','preferences','providers','connectivity','plugins','system'];
+  const section=validSections.includes(name)?name:'conversation';
   _settingsSection=section;
   _currentSettingsSection=section;
-  const map={conversation:'Conversation',appearance:'Appearance',preferences:'Preferences',providers:'Providers',plugins:'Plugins',system:'System'};
+  const map={conversation:'Conversation',appearance:'Appearance',preferences:'Preferences',providers:'Providers',connectivity:'Connectivity',plugins:'Plugins',system:'System'};
   // Sidebar menu items
   document.querySelectorAll('#settingsMenu .side-menu-item').forEach(it=>{
     it.classList.toggle('active', it.dataset.settingsSection===section);
   });
   // Panes in main
-  ['conversation','appearance','preferences','providers','plugins','system'].forEach(key=>{
+  ['conversation','appearance','preferences','providers','connectivity','plugins','system'].forEach(key=>{
     const pane=$('settingsPane'+map[key]);
     if(pane) pane.classList.toggle('active', key===section);
   });
@@ -5322,6 +5323,7 @@ function switchSettingsSection(name){
   // Lazy-load integration panels when their tabs are opened
   if(section==='providers') loadProvidersPanel();
   if(section==='plugins') loadPluginsPanel();
+  if(section==='connectivity') loadConnectivityPanel();
 }
 
 function _syncHermesPanelSessionActions(){
@@ -6008,6 +6010,222 @@ async function loadProvidersPanel(){
   }catch(e){
     list.innerHTML='<div style="color:var(--error);padding:12px;font-size:13px">Failed to load providers: '+esc(e.message||String(e))+'</div>';
   }
+}
+
+// ── Connectivity panel ───────────────────────────────────────────────────────
+
+async function loadConnectivityPanel(){
+  const list=$('connectivityProvidersList');
+  if(!list) return;
+  list.innerHTML='<div style="color:var(--muted);font-size:12px;padding:12px">Loading…</div>';
+  try{
+    const data=await api('/api/providers/status');
+    const providers=data.providers||{};
+    // Display order: local agent first, then API key providers, then OAuth providers
+    const order=['hermes','anthropic','openai','openrouter','gemini','deepseek','ollama','lmstudio','openai-codex','copilot'];
+    list.innerHTML='';
+    for(const pid of order){
+      const p=providers[pid];
+      if(!p) continue;
+      list.appendChild(_buildConnectivityCard(p));
+    }
+  }catch(e){
+    list.innerHTML='<div style="color:var(--error,#f87171);padding:12px;font-size:13px">Failed to load connectivity status: '+esc(e.message||String(e))+'</div>';
+  }
+}
+
+function _buildConnectivityCard(p){
+  const card=document.createElement('div');
+  card.className='conn-card';
+  card.dataset.pid=p.id;
+  card.dataset.authType=p.auth_type||'api_key';
+
+  const isConnected=p.status==='connected';
+  const isMissing=p.status==='missing_key';
+  const isUnreachable=p.status==='unreachable';
+  const statusLabel=isConnected?'Connected':isMissing?'No key':'Unreachable';
+  const statusClass=isConnected?'conn-badge--ok':isMissing?'conn-badge--missing':'conn-badge--error';
+
+  // Reason hint shown under the card body for unreachable keys
+  const _reasonHints={
+    'key_format_invalid': 'Key format looks invalid — double-check it and save again.',
+    'key_too_short': 'Key appears too short — paste the full key and save again.',
+    'agent_not_found': 'Hermes agent directory not found. Start the agent from your terminal.',
+  };
+  const reasonHint=isUnreachable&&p.reason?(_reasonHints[p.reason]||''):'';
+
+  let bodyHtml='';
+  if(p.configurable && p.auth_type==='api_key'){
+    // Mask hint when key is already configured
+    const placeholder=isConnected?'Enter new key to replace existing…':'Paste API key…';
+    bodyHtml=`<div class="conn-card-body">
+      <div class="conn-card-field">
+        <label class="conn-card-label">API Key${p.env_var?' <span style="font-weight:400;color:var(--muted);">('+esc(p.env_var)+')</span>':''}
+        </label>
+        ${reasonHint?`<div class="conn-card-reason">${esc(reasonHint)}</div>`:''}
+        <div class="conn-card-row">
+          <input class="conn-card-input" type="password" id="connInput_${esc(p.id)}" placeholder="${esc(placeholder)}" autocomplete="off">
+          <button class="conn-card-btn conn-card-btn-primary" onclick="_saveConnectivityKey('${esc(p.id)}')">Save</button>
+          ${isConnected||isUnreachable?`<button class="conn-card-btn conn-card-btn-danger" onclick="_removeConnectivityKey('${esc(p.id)}')">Remove</button>`:''}
+        </div>
+        <div class="conn-card-status" id="connStatus_${esc(p.id)}"></div>
+      </div>
+    </div>`;
+  } else if(p.auth_type==='oauth'){
+    // OAuth providers: authenticated via Hermes CLI, not via API key
+    const oauthInstructions={
+      'openai-codex': 'Authenticate via the Hermes CLI: <code>hermes auth openai-codex</code>',
+      'copilot': 'Authenticate via the Hermes CLI: <code>hermes auth copilot</code>',
+    };
+    const instructions=oauthInstructions[p.id]||`Authenticate via the Hermes CLI: <code>hermes auth ${esc(p.id)}</code>`;
+    bodyHtml=`<div class="conn-card-body">
+      <div style="font-size:12px;color:var(--muted);line-height:1.55">
+        ${isConnected?'<span style="color:#22c55e">Authenticated.</span> Your session is active.'
+          :'Not authenticated. '+instructions+'.'}
+      </div>
+    </div>`;
+  } else if(p.id==='hermes'){
+    const hermesHint=p.reason==='agent_not_found'
+      ?'<span style="color:var(--error,#f87171)">Agent directory not found.</span> Start the Hermes agent from your terminal to connect.'
+      :'Hermes runs locally — no API key required. Start the agent from the terminal to connect.';
+    bodyHtml=`<div class="conn-card-body"><div style="font-size:12px;color:var(--muted);line-height:1.55">${hermesHint}</div></div>`;
+  } else if(p.type==='local_api'){
+    bodyHtml=`<div class="conn-card-body"><div style="font-size:12px;color:var(--muted);line-height:1.55">${esc(p.label)} is a local service. Start it on your machine and configure the base URL in <code>config.yaml</code> if needed.</div></div>`;
+  }
+
+  card.innerHTML=`
+    <button type="button" class="conn-card-header" onclick="_toggleConnCard(this)" aria-expanded="false">
+      <div class="conn-card-info">
+        <div class="conn-card-name">${esc(p.label)}</div>
+        ${p.auth_type==='oauth'?'<span class="conn-card-auth-type">OAuth</span>':''}
+      </div>
+      <span class="conn-badge ${statusClass}">${statusLabel}</span>
+      <svg class="conn-card-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+    </button>
+    ${bodyHtml}`;
+
+  return card;
+}
+
+function _toggleConnCard(btn){
+  const card=btn.closest('.conn-card');
+  if(!card) return;
+  const open=card.classList.toggle('open');
+  btn.setAttribute('aria-expanded',open);
+}
+
+async function _saveConnectivityKey(pid){
+  const input=document.getElementById('connInput_'+pid);
+  const status=document.getElementById('connStatus_'+pid);
+  if(!input) return;
+  const key=input.value.trim();
+  if(!key){ if(status){status.textContent='Enter a key first.';status.style.color='var(--muted)';}return; }
+  if(status){status.textContent='Saving…';status.style.color='var(--muted)';}
+  try{
+    // Anthropic keys can also go through /api/settings for the admin key path,
+    // but the standard API key path is the same: /api/providers
+    await api('/api/providers',{method:'POST',body:JSON.stringify({provider:pid,api_key:key})});
+    if(status){status.textContent='Saved.';status.style.color='#22c55e';}
+    input.value='';
+    setTimeout(()=>{ loadConnectivityPanel(); _refreshProviderStatusUI(); },400);
+  }catch(e){
+    if(status){status.textContent='Error: '+esc(e.message||'Save failed');status.style.color='var(--error,#f87171)';}
+  }
+}
+
+async function _removeConnectivityKey(pid){
+  const status=document.getElementById('connStatus_'+pid);
+  if(status){status.textContent='Removing…';status.style.color='var(--muted)';}
+  try{
+    await api('/api/providers/delete',{method:'POST',body:JSON.stringify({provider:pid})});
+    if(status){status.textContent='Removed.';status.style.color='var(--muted)';}
+    setTimeout(()=>{ loadConnectivityPanel(); _refreshProviderStatusUI(); },400);
+  }catch(e){
+    if(status){status.textContent='Error: '+esc(e.message||'Remove failed');status.style.color='var(--error,#f87171)';}
+  }
+}
+
+// ── Provider status refresh (tab visibility + home view) ──────────────────────
+
+let _providerStatusCache=null;
+
+async function _refreshProviderStatusUI(){
+  try{
+    const data=await api('/api/providers/status');
+    _providerStatusCache=data.providers||{};
+    _applyProviderStatusToUI(_providerStatusCache);
+  }catch(e){
+    // Non-fatal: tabs stay in their current state
+  }
+}
+
+// Provider-status-driven UI registry:
+// Maps each provider id to a CSS selector for elements that should only be
+// visible when that provider has valid credentials. Add new entries here
+// whenever a new provider gets dedicated UI surfaces.
+const _PROVIDER_UI_REGISTRY = {
+  'anthropic': '[data-requires-provider="anthropic"]',
+};
+
+function _applyProviderStatusToUI(providers){
+  // Generalized: hide/show elements for each registered provider based on
+  // their actual credential status from the API.
+  for(const [pid, selector] of Object.entries(_PROVIDER_UI_REGISTRY)){
+    const entry=providers&&providers[pid];
+    // Use status === 'connected' (not just has_key) so format/probe failures
+    // also gate the UI — a bad key should hide provider tabs just like no key.
+    const ready=!!(entry&&entry.status==='connected');
+    document.querySelectorAll(selector).forEach(el=>{
+      if(!ready){
+        el.style.display='none';
+        el.dataset.hiddenByConnectivity='1';
+      } else if(el.dataset.hiddenByConnectivity){
+        el.style.display='';
+        delete el.dataset.hiddenByConnectivity;
+      }
+    });
+  }
+
+  // Update home provider status strip
+  _renderHomeProviderStatus(providers);
+}
+
+function _renderHomeProviderStatus(providers){
+  const strip=document.getElementById('homeProviderStatus');
+  if(!strip) return;
+
+  // Show all managed providers (API key + OAuth), excluding local-only ones
+  // (Hermes, Ollama, LM Studio) which are not user-configurable in the WebUI.
+  const _skipFromStrip=new Set(['hermes','ollama','lmstudio']);
+  const unconfigured=[];
+  // Stable display order — most common providers first
+  const order=['anthropic','openai','openrouter','gemini','deepseek','openai-codex','copilot'];
+  for(const pid of order){
+    const p=providers&&providers[pid];
+    if(!p) continue;
+    if(_skipFromStrip.has(pid)) continue;
+    const ok=p.status==='connected';
+    if(!ok){
+      const label=(p.label||pid).replace('Anthropic','Claude');
+      unconfigured.push({pid,label,authType:p.auth_type||'api_key'});
+    }
+  }
+
+  if(unconfigured.length===0){
+    strip.style.display='none';
+    return;
+  }
+
+  const wifiOffIcon=`<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 1l22 22"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.56 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1"/></svg>`;
+
+  strip.style.display='';
+  strip.innerHTML='<div class="home-provider-strip"><span class="home-provider-strip-label">Not connected:</span>'+
+    unconfigured.map(i=>{
+      const hint=i.authType==='oauth'?' (OAuth)':'';
+      return `<button class="home-provider-chip" onclick="switchSettingsSection('connectivity');switchPanel('settings',{fromRailClick:false})">`+
+        wifiOffIcon+`${esc(i.label)}${esc(hint)}</button>`;
+    }).join('')+
+    '</div>';
 }
 
 async function _refreshProviderQuota(card,button){
@@ -7255,6 +7473,18 @@ function _claudeErrMsg(resp) {
 
 function loadClaudeChat() {
   const list = document.getElementById('claudeChatList');
+  // If Anthropic is not configured, show a helpful placeholder instead of a broken UI
+  const anthropicReady = _providerStatusCache
+    ? !!(_providerStatusCache['anthropic'] && _providerStatusCache['anthropic'].status === 'connected')
+    : true; // Optimistic until status is fetched
+  if (!anthropicReady && list) {
+    list.innerHTML = `<div style="padding:24px 16px;text-align:center;color:var(--muted);font-size:13px;line-height:1.55">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:10px;opacity:.5" aria-hidden="true"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1"/></svg>
+      <div style="font-weight:500;color:var(--text);margin-bottom:6px">Anthropic not configured</div>
+      <div style="font-size:12px">Add your API key in <button style="background:none;border:none;padding:0;color:var(--accent);cursor:pointer;font-size:12px;text-decoration:underline" onclick="switchSettingsSection('connectivity');switchPanel('settings',{fromRailClick:false})">Connectivity settings</button> to use Claude.</div>
+    </div>`;
+    return;
+  }
   if (list && _claudeConversation.length === 0) {
     list.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Start a new conversation →</div>';
   }
@@ -7418,6 +7648,17 @@ function _renderClaudeNoKey(container, keyName) {
 async function loadClaudeBatches(refresh) {
   const bodyEl = document.getElementById('claudeBatchesBody');
   const list = document.getElementById('claudeBatchesList');
+  // Guard: show placeholder when Anthropic is not connected
+  if (_providerStatusCache && _providerStatusCache['anthropic'] &&
+      _providerStatusCache['anthropic'].status !== 'connected') {
+    const msg = '<div style="padding:24px 16px;text-align:center;color:var(--muted);font-size:13px;line-height:1.55">'+
+      '<div style="font-weight:500;color:var(--text);margin-bottom:6px">Anthropic not configured</div>'+
+      '<div style="font-size:12px">Add your API key in <button style="background:none;border:none;padding:0;color:var(--accent);cursor:pointer;font-size:12px;text-decoration:underline" onclick="switchSettingsSection(\'connectivity\');switchPanel(\'settings\',{fromRailClick:false})">Connectivity settings</button> to use Batches.</div>'+
+      '</div>';
+    if (bodyEl) bodyEl.innerHTML = msg;
+    if (list) list.innerHTML = msg;
+    return;
+  }
   if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">Loading…</div>';
   if (list) list.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div>';
   try {
@@ -7598,6 +7839,17 @@ async function loadClaudeFiles(refresh) {
   _initClaudeFileDrop();
   const bodyEl = document.getElementById('claudeFilesBody');
   const list = document.getElementById('claudeFilesList');
+  // Guard: show placeholder when Anthropic is not connected
+  if (_providerStatusCache && _providerStatusCache['anthropic'] &&
+      _providerStatusCache['anthropic'].status !== 'connected') {
+    const msg = '<div style="padding:24px 16px;text-align:center;color:var(--muted);font-size:13px;line-height:1.55">'+
+      '<div style="font-weight:500;color:var(--text);margin-bottom:6px">Anthropic not configured</div>'+
+      '<div style="font-size:12px">Add your API key in <button style="background:none;border:none;padding:0;color:var(--accent);cursor:pointer;font-size:12px;text-decoration:underline" onclick="switchSettingsSection(\'connectivity\');switchPanel(\'settings\',{fromRailClick:false})">Connectivity settings</button> to use Files.</div>'+
+      '</div>';
+    if (bodyEl) bodyEl.innerHTML = msg;
+    if (list) list.innerHTML = msg;
+    return;
+  }
   if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">Loading…</div>';
   if (list) list.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div>';
   try {
@@ -7699,6 +7951,17 @@ function _sortClaudeUsers(col) {
 async function loadClaudeAdmin(refresh) {
   const bodyEl = document.getElementById('claudeAdminBody');
   const sideEl = document.getElementById('claudeAdminSidebar');
+  // Guard: show placeholder when Anthropic is not connected
+  if (_providerStatusCache && _providerStatusCache['anthropic'] &&
+      _providerStatusCache['anthropic'].status !== 'connected') {
+    const msg = '<div style="padding:24px 16px;text-align:center;color:var(--muted);font-size:13px;line-height:1.55">'+
+      '<div style="font-weight:500;color:var(--text);margin-bottom:6px">Anthropic not configured</div>'+
+      '<div style="font-size:12px">Add your API key in <button style="background:none;border:none;padding:0;color:var(--accent);cursor:pointer;font-size:12px;text-decoration:underline" onclick="switchSettingsSection(\'connectivity\');switchPanel(\'settings\',{fromRailClick:false})">Connectivity settings</button> to view usage and admin data.</div>'+
+      '</div>';
+    if (bodyEl) bodyEl.innerHTML = msg;
+    if (sideEl) sideEl.innerHTML = msg;
+    return;
+  }
   if (bodyEl) bodyEl.innerHTML = '<div class="claude-empty">Loading…</div>';
   if (sideEl) sideEl.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:12px">Loading...</div>';
   const fmtNum = n => n >= 1e6 ? (n/1e6).toFixed(2)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
@@ -7881,9 +8144,20 @@ async function testClaudeConnection() {
   }
 }
 
-// Initialise provider on page load (after DOM is ready)
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', _initProvider);
-} else {
+// Initialise provider and connectivity status on page load (after DOM is ready)
+function _initProviderAndStatus(){
   _initProvider();
+  // Fetch provider status asynchronously — updates tab visibility and home view
+  _refreshProviderStatusUI();
+  // Poll periodically so that tabs appear/disappear when keys are added via
+  // external config changes (e.g. environment variables, CLI) without a
+  // page reload. 60 s is short enough to feel responsive, long enough to
+  // avoid hammering the server.
+  setInterval(_refreshProviderStatusUI, 60_000);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initProviderAndStatus);
+} else {
+  _initProviderAndStatus();
 }

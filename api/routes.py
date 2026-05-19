@@ -2217,7 +2217,7 @@ from api.run_journal import (
     read_run_events,
     stale_interrupted_event,
 )
-from api.providers import get_providers, get_provider_quota, get_provider_cost_history, set_provider_key, remove_provider_key
+from api.providers import get_providers, get_provider_quota, get_provider_cost_history, set_provider_key, remove_provider_key, get_providers_status
 from api.onboarding import (
     apply_onboarding_setup,
     get_onboarding_status,
@@ -3509,6 +3509,10 @@ def handle_get(handler, parsed) -> bool:
     # ── Providers (GET) ──
     if parsed.path == "/api/providers":
         return j(handler, get_providers())
+
+    # ── Provider connectivity status (lightweight key-presence check) ──
+    if parsed.path == "/api/providers/status":
+        return j(handler, get_providers_status())
 
     # ── Plugins/hooks visibility (read-only, no callback/source internals) ──
     if parsed.path == "/api/plugins":

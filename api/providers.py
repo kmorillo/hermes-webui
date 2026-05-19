@@ -2041,6 +2041,11 @@ def set_provider_key(provider_id: str, api_key: str | None) -> dict[str, Any]:
     # disrupting active streaming sessions that may be reading config.cfg.
     invalidate_models_cache()
 
+    # Invalidate the probe cache so the next /api/providers/status call
+    # triggers a fresh background probe against the new/removed key instead
+    # of returning a stale "connected" or "unreachable" result.
+    _invalidate_probe_cache(provider_id)
+
     return {
         "ok": True,
         "provider": provider_id,
@@ -2068,6 +2073,283 @@ def remove_provider_key(provider_id: str) -> dict[str, Any]:
         _clean_provider_key_from_config(provider_id)
 
     return result
+
+
+_KEY_FORMAT_PREFIXES: dict[str, str] = {
+    "anthropic": "sk-ant-",
+    "openai": "sk-",
+    "openrouter": "sk-or-",
+}
+
+# ── Lightweight HTTP probe cache ──────────────────────────────────────────────
+# Maps provider_id -> (status, reason, monotonic_timestamp).
+# Background threads update this; the endpoint returns it without blocking.
+_probe_cache: dict[str, tuple[str, str, float]] = {}
+_probe_cache_lock = threading.Lock()
+_PROBE_TTL = 300.0  # 5 minutes
+
+# Provider probe configuration: URL, how to attach the key, expected 2xx codes.
+_PROVIDER_PROBE_URL: dict[str, str] = {
+    "anthropic": "https://api.anthropic.com/v1/models",
+    "openai": "https://api.openai.com/v1/models",
+    "openrouter": "https://openrouter.ai/api/v1/models",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/models",
+    "deepseek": "https://api.deepseek.com/models",
+}
+
+
+def _make_probe_headers(pid: str, key: str) -> dict[str, str]:
+    """Return request headers for a provider probe."""
+    base = {"User-Agent": "hermes-webui/probe"}
+    if pid == "anthropic":
+        return {**base, "x-api-key": key, "anthropic-version": "2023-06-01"}
+    if pid == "gemini":
+        return base  # Gemini uses ?key= query param
+    return {**base, "Authorization": f"Bearer {key}"}
+
+
+def _make_probe_params(pid: str, key: str) -> dict[str, str]:
+    """Return query params for a provider probe."""
+    if pid == "gemini":
+        return {"key": key}
+    return {}
+
+
+def _run_probe(pid: str, key: str) -> None:
+    """Probe a provider's auth endpoint and update the cache.
+
+    Runs in a daemon thread — never blocks the request path.
+    """
+    probe_url = _PROVIDER_PROBE_URL.get(pid)
+    if not probe_url:
+        return
+    try:
+        import requests as _req
+        resp = _req.get(
+            probe_url,
+            headers=_make_probe_headers(pid, key),
+            params=_make_probe_params(pid, key),
+            timeout=5,
+            allow_redirects=True,
+        )
+        code = resp.status_code
+        if 200 <= code < 300:
+            status, reason = "connected", ""
+        elif code in (401, 403):
+            status, reason = "unreachable", "auth_rejected"
+        elif code == 429:
+            # Rate-limited but key is valid
+            status, reason = "connected", ""
+        else:
+            status, reason = "unreachable", f"http_{code}"
+    except Exception:
+        status, reason = "unreachable", "network_error"
+
+    with _probe_cache_lock:
+        _probe_cache[pid] = (status, reason, time.monotonic())
+
+
+def _invalidate_probe_cache(pid: str) -> None:
+    """Remove the probe cache entry for a provider.
+
+    Call this whenever a provider's credentials are written or deleted so the
+    next status fetch triggers a fresh probe rather than returning a stale
+    "connected" or "unreachable" result.
+    """
+    with _probe_cache_lock:
+        _probe_cache.pop(pid, None)
+
+
+def _get_probe_status(pid: str, key: str) -> tuple[str, str]:
+    """Return (status, reason) for a provider with a key.
+
+    Returns cached probe result when fresh, otherwise launches a background
+    probe and returns a format-based result while the probe is in-flight.
+    """
+    now = time.monotonic()
+    with _probe_cache_lock:
+        cached = _probe_cache.get(pid)
+    if cached is not None:
+        cached_status, cached_reason, ts = cached
+        if now - ts < _PROBE_TTL:
+            return cached_status, cached_reason
+
+    # Cache miss or stale — launch background probe, return format result now
+    if pid in _PROVIDER_PROBE_URL:
+        threading.Thread(
+            target=_run_probe, args=(pid, key), daemon=True, name=f"probe-{pid}"
+        ).start()
+
+    valid, fmt_reason = _validate_key_format(pid, key)
+    return ("connected" if valid else "unreachable"), fmt_reason
+
+
+def _validate_key_format(pid: str, key: str) -> tuple[bool, str]:
+    """Lightweight format check — no network probe.
+
+    Returns ``(valid, reason)`` where ``reason`` is a short code when
+    validation fails (empty string on success).
+    """
+    if not key or len(key) < 8:
+        return False, "key_too_short"
+    required_prefix = _KEY_FORMAT_PREFIXES.get(pid)
+    if required_prefix and not key.startswith(required_prefix):
+        return False, "key_format_invalid"
+    return True, ""
+
+
+def _get_oauth_auth_status(pid: str) -> dict[str, Any]:
+    """Return OAuth auth status dict for an OAuth provider.
+
+    Falls back to ``{"logged_in": False}`` when hermes_cli is unavailable.
+    """
+    try:
+        import re as _re
+        if not _re.match(r"^[a-z][a-z0-9_-]{0,63}$", pid):
+            return {"logged_in": False}
+        from hermes_cli.auth import get_auth_status as _gas
+        result = _gas(pid)
+        if isinstance(result, dict):
+            return result
+    except Exception:
+        pass
+    return {"logged_in": False}
+
+
+def get_providers_status() -> dict[str, Any]:
+    """Return lightweight connectivity status for all managed providers.
+
+    Each provider entry contains:
+    - ``id``: canonical provider slug
+    - ``label``: human-readable name
+    - ``status``: ``"connected"``, ``"missing_key"``, or ``"unreachable"``
+    - ``has_key``: whether credentials are configured
+    - ``configurable``: whether the key can be set from the WebUI
+    - ``env_var``: environment variable name for the API key (API key providers)
+    - ``auth_type``: ``"api_key"``, ``"oauth"``, or ``"local"``
+    - ``reason``: short code explaining a non-connected status (may be empty)
+
+    Status semantics:
+    - ``connected``: credentials present and pass lightweight format validation
+    - ``missing_key``: no credentials found
+    - ``unreachable``: credentials present but fail format validation, or local
+      service is not reachable
+    """
+    from api.config import _HERMES_FOUND
+
+    statuses: dict[str, Any] = {}
+
+    # ── Hermes local agent ────────────────────────────────────────────────────
+    hermes_status = "connected" if _HERMES_FOUND else "unreachable"
+    hermes_reason = "" if _HERMES_FOUND else "agent_not_found"
+    statuses["hermes"] = {
+        "id": "hermes",
+        "label": "Hermes",
+        "status": hermes_status,
+        "auth_type": "local",
+        "type": "local",
+        "has_key": True,
+        "configurable": False,
+        "env_var": "",
+        "reason": hermes_reason,
+    }
+
+    # ── API key providers ─────────────────────────────────────────────────────
+    _STATUS_API_PROVIDERS = [
+        "anthropic",
+        "openai",
+        "openrouter",
+        "gemini",
+        "deepseek",
+        "ollama",
+        "lmstudio",
+    ]
+
+    for pid in _STATUS_API_PROVIDERS:
+        has_key = _provider_has_key(pid)
+        display = _PROVIDER_DISPLAY.get(pid, pid.replace("-", " ").title())
+        env_var = _PROVIDER_ENV_VAR.get(pid, "")
+        is_local = pid in {"ollama", "lmstudio"}
+
+        if not has_key:
+            status = "missing_key"
+            reason = ""
+        else:
+            # Read the raw key from all sources so we can probe / validate it.
+            # Order: .env file → process environment → config.yaml providers section.
+            raw_key = ""
+            if env_var:
+                env_path = _get_hermes_home() / ".env"
+                env_vals = _load_env_file(env_path)
+                raw_key = env_vals.get(env_var) or os.getenv(env_var) or ""
+            if not raw_key:
+                # Fall back to config.yaml providers.<pid>.api_key so that keys
+                # set through the YAML file are also probed/validated.
+                try:
+                    _cfg = get_config()
+                    _pcfg = _cfg.get("providers", {})
+                    if isinstance(_pcfg, dict):
+                        _entry = _pcfg.get(pid, {})
+                        if isinstance(_entry, dict):
+                            raw_key = str(_entry.get("api_key") or "")
+                except Exception:
+                    pass
+
+            if raw_key and pid in _PROVIDER_PROBE_URL:
+                # Use background probe (launches thread first time, returns cache
+                # on subsequent calls within TTL).  Falls back to format check
+                # while probe is in-flight.
+                status, reason = _get_probe_status(pid, raw_key)
+            elif raw_key and pid in _KEY_FORMAT_PREFIXES:
+                valid, fmt_reason = _validate_key_format(pid, raw_key)
+                status = "connected" if valid else "unreachable"
+                reason = fmt_reason if not valid else ""
+            elif raw_key:
+                # Key is present from some source but we have no probe/format
+                # rule — treat as connected (optimistic, same as before).
+                status = "connected"
+                reason = ""
+            else:
+                # has_key was True but we couldn't read the actual key value;
+                # return a conservative non-connected state rather than lying.
+                status = "unreachable"
+                reason = "key_unreadable"
+
+        statuses[pid] = {
+            "id": pid,
+            "label": display,
+            "status": status,
+            "auth_type": "api_key",
+            "type": "local_api" if is_local else "api",
+            "has_key": has_key,
+            "configurable": bool(env_var) and not is_local,
+            "env_var": env_var,
+            "reason": reason,
+        }
+
+    # ── OAuth / token-flow providers ──────────────────────────────────────────
+    _STATUS_OAUTH_PROVIDERS = [
+        ("openai-codex", "OpenAI Codex"),
+        ("copilot", "GitHub Copilot"),
+    ]
+
+    for pid, default_label in _STATUS_OAUTH_PROVIDERS:
+        display = _PROVIDER_DISPLAY.get(pid, default_label)
+        auth_info = _get_oauth_auth_status(pid)
+        logged_in = bool(auth_info.get("logged_in"))
+        statuses[pid] = {
+            "id": pid,
+            "label": display,
+            "status": "connected" if logged_in else "missing_key",
+            "auth_type": "oauth",
+            "type": "api",
+            "has_key": logged_in,
+            "configurable": False,
+            "env_var": "",
+            "reason": "" if logged_in else "oauth_not_authenticated",
+        }
+
+    return {"ok": True, "providers": statuses}
 
 
 def _clean_provider_key_from_config(provider_id: str) -> None:
