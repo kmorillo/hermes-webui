@@ -2571,9 +2571,9 @@ main.main.showing-claude-admin > #mainClaudeAdmin{display:flex;overflow-y:auto;}
 /* ── Claude-only / Hermes-only rail buttons ──────────────────────────────── */
 .claude-only{display:none!important;}
 body.provider-claude .claude-only{display:flex!important;}
-/* Hide Hermes-specific nav items when Claude provider is active */
-body.provider-claude nav.rail .nav-tab:not(.claude-only):not([data-panel="settings"]){display:none!important;}
-body.provider-claude .sidebar-nav .nav-tab:not(.claude-only):not([data-panel="settings"]){display:none!important;}
+/* Hide Hermes-specific nav items when Claude provider is active; keep Settings and Insights */
+body.provider-claude nav.rail .nav-tab:not(.claude-only):not([data-panel="settings"]):not([data-panel="insights"]){display:none!important;}
+body.provider-claude .sidebar-nav .nav-tab:not(.claude-only):not([data-panel="settings"]):not([data-panel="insights"]){display:none!important;}
 
 /* ── Claude panel content styles ─────────────────────────────────────────── */
 .claude-panel-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;}

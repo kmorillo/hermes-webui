@@ -2918,26 +2918,61 @@ async function loadInsights(animate) {
     refreshBtn.style.opacity = '0.5';
     refreshBtn.disabled = true;
   }
-  // When Claude provider is active, show Claude usage summary instead of Hermes insights
+  // When Claude provider is active, show Claude usage + cost + CC analytics
   if (_currentProvider === 'claude') {
     try {
-      const resp = await api('/api/claude/usage?granularity=day');
-      if (!resp.ok) {
-        box.innerHTML = `<div style="color:var(--accent);font-size:12px;padding:16px">${esc(resp.error || 'Claude insights unavailable — set an admin key in Settings → Providers.')}</div>`;
+      const [usageResp, ccResp] = await Promise.all([
+        api('/api/claude/usage?granularity=day'),
+        api('/api/claude/usage/claude_code').catch(() => ({ok:false,data:[]})),
+      ]);
+      if (!usageResp.ok) {
+        box.innerHTML = `<div style="color:var(--accent);font-size:12px;padding:16px">${esc(usageResp.error || 'Claude insights unavailable — set an admin key in Settings → Providers.')}</div>`;
         return;
       }
-      const usage = Array.isArray(resp.data) ? resp.data : (resp.data?.data || []);
-      let totalIn = 0, totalOut = 0;
-      usage.forEach(u => { totalIn += (u.input_tokens || 0); totalOut += (u.output_tokens || 0); });
+      const usage = Array.isArray(usageResp.data) ? usageResp.data : (usageResp.data?.data || []);
+      const cc = ccResp.ok ? (Array.isArray(ccResp.data) ? ccResp.data : (ccResp.data?.data || [])) : [];
+      let totalIn = 0, totalOut = 0, totalCost = 0;
+      usage.forEach(u => {
+        totalIn += (u.input_tokens || 0);
+        totalOut += (u.output_tokens || 0);
+        totalCost += (u.total_cost || 0);
+      });
       const fmtN = n => n >= 1e6 ? (n/1e6).toFixed(2)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n);
+      const fmtC = c => c > 0 ? '$'+c.toFixed(4) : '—';
+      // Cost breakdown by day (top 10 by cost)
+      const byCost = [...usage].filter(u => u.total_cost > 0).sort((a,b) => (b.total_cost||0)-(a.total_cost||0));
+      const ccSection = cc.length ? `
+        <div class="claude-section-head" style="margin-top:16px">Claude Code Analytics</div>
+        <table class="claude-admin-table">
+          <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Cost</th></tr></thead>
+          <tbody>${cc.slice(0,20).map(r=>`<tr>
+            <td>${r.period_start?new Date(r.period_start).toLocaleDateString():'—'}</td>
+            <td>${fmtN(r.input_tokens||0)}</td>
+            <td>${fmtN(r.output_tokens||0)}</td>
+            <td>${fmtC(r.total_cost||0)}</td>
+          </tr>`).join('')}</tbody>
+        </table>` : '';
       box.innerHTML = `<div style="padding:16px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:12px">Claude Usage (last 30 days)</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px">
+        <div class="claude-section-head">Claude Usage — Last 30 Days</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px">
           <div class="claude-admin-stat"><div class="claude-admin-stat-label">Input tokens</div><div class="claude-admin-stat-value">${fmtN(totalIn)}</div></div>
           <div class="claude-admin-stat"><div class="claude-admin-stat-label">Output tokens</div><div class="claude-admin-stat-value">${fmtN(totalOut)}</div></div>
+          <div class="claude-admin-stat"><div class="claude-admin-stat-label">Est. cost</div><div class="claude-admin-stat-value" style="font-size:16px">${fmtC(totalCost)}</div></div>
           <div class="claude-admin-stat"><div class="claude-admin-stat-label">Days tracked</div><div class="claude-admin-stat-value">${usage.length}</div></div>
         </div>
-        ${usage.length ? `<table class="claude-admin-table">
+        ${byCost.length ? `<div class="claude-section-head">Cost Breakdown</div>
+        <table class="claude-admin-table">
+          <thead><tr><th>Date</th><th>In</th><th>Out</th><th>Cost</th></tr></thead>
+          <tbody>${byCost.slice(0,10).map(u=>`<tr>
+            <td>${u.period_start?new Date(u.period_start).toLocaleDateString():'—'}</td>
+            <td>${fmtN(u.input_tokens||0)}</td>
+            <td>${fmtN(u.output_tokens||0)}</td>
+            <td>${fmtC(u.total_cost||0)}</td>
+          </tr>`).join('')}</tbody>
+        </table>` : ''}
+        ${ccSection}
+        ${usage.length ? `<div class="claude-section-head" style="margin-top:16px">Daily Usage</div>
+        <table class="claude-admin-table">
           <thead><tr><th>Date</th><th>In</th><th>Out</th></tr></thead>
           <tbody>${usage.slice(0,30).map(u=>`<tr>
             <td>${u.period_start?new Date(u.period_start).toLocaleDateString():'—'}</td>
@@ -5867,6 +5902,12 @@ async function loadSettingsPanel(){
       const disableBtn=$('btnDisableAuth');
       if(disableBtn) disableBtn.style.display='none';
     }
+    // Populate Anthropic key inputs with masked values so the user can see
+    // a key is stored without exposing the full secret.
+    const _apiKeyEl = document.getElementById('anthropicApiKeyInput');
+    const _adminKeyEl = document.getElementById('anthropicAdminKeyInput');
+    if (_apiKeyEl && settings.anthropic_api_key) _apiKeyEl.value = settings.anthropic_api_key;
+    if (_adminKeyEl && settings.anthropic_admin_key) _adminKeyEl.value = settings.anthropic_admin_key;
     _syncHermesPanelSessionActions();
     if(typeof loadDashboardSettings==='function') loadDashboardSettings();
     loadProvidersPanel(); // load provider cards in background
@@ -7124,13 +7165,7 @@ async function _restoreCheckpoint(workspace,checkpoint,message){
 
 function _updateClaudeAdminNavState(hasAdminKey) {
   document.querySelectorAll('[data-panel="claude-admin"]').forEach(btn => {
-    if (hasAdminKey) {
-      btn.style.opacity = '';
-      btn.title = '';
-    } else {
-      btn.style.opacity = '0.5';
-      btn.title = 'Admin key not configured — add it in Settings → Providers';
-    }
+    btn.style.display = hasAdminKey ? '' : 'none';
   });
 }
 

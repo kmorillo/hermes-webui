@@ -3533,6 +3533,12 @@ def handle_get(handler, parsed) -> bool:
         settings = load_settings()
         # Never expose the stored password hash to clients
         settings.pop("password_hash", None)
+        # Mask Anthropic API keys — return a sentinel so the UI knows a key
+        # is stored without exposing the full value.
+        for _akey in ("anthropic_api_key", "anthropic_admin_key"):
+            _v = settings.get(_akey, "")
+            if _v:
+                settings[_akey] = _v[:8] + "\u2022\u2022\u2022\u2022" + _v[-4:] if len(_v) > 12 else "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
         # Surface env-var precedence so the UI can disable the password field
         # instead of silently no-oping the save (#1560). The setting takes
         # precedence in api.auth.get_password_hash(), but until now the UI
@@ -5398,6 +5404,12 @@ def handle_post(handler, parsed) -> bool:
 
         if "bot_name" in body:
             body["bot_name"] = (str(body["bot_name"]) or "").strip() or "Hermes"
+        # Drop masked Anthropic key sentinels — if the value contains bullet
+        # characters (•) it was echoed back from GET /api/settings unchanged;
+        # skip to avoid overwriting the stored key with a masked placeholder.
+        for _akey in ("anthropic_api_key", "anthropic_admin_key"):
+            if _akey in body and "\u2022" in str(body.get(_akey, "")):
+                body.pop(_akey)
 
         auth_enabled_before = is_auth_enabled()
         current_cookie = parse_cookie(handler)
